@@ -84,6 +84,16 @@ interface DashboardResponse {
 // Store coverage reports in memory
 const coverageReports = new Map<string, CoverageReport>()
 
+// Get the base URL dynamically
+function getBaseUrl() {
+  // In production, use your Vercel URL
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://persona-sim-fresh-zmi2.vercel.app'
+  }
+  // In development, use localhost
+  return process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+}
+
 export async function POST(req: Request) {
   try {
     const { projectName, domain, personas } = await req.json()
@@ -101,7 +111,8 @@ export async function POST(req: Request) {
     }
 
     // Fetch real session data from storage API
-    const sessionsUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/session-storage?projectName=${encodeURIComponent(projectName)}`
+    const baseUrl = getBaseUrl()
+    const sessionsUrl = `${baseUrl}/api/session-storage?projectName=${encodeURIComponent(projectName)}`
     console.log('Fetching sessions from:', sessionsUrl)
 
     const sessionsResponse = await fetch(sessionsUrl)
@@ -189,7 +200,8 @@ export async function GET(req: Request) {
       console.log('Analyzing coverage for session:', sessionId)
 
       // Fetch the session data
-      const sessionsUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/session-storage`
+      const baseUrl = getBaseUrl()
+      const sessionsUrl = `${baseUrl}/api/session-storage`
       console.log('Fetching all sessions from:', sessionsUrl)
 
       const sessionsResponse = await fetch(sessionsUrl)
