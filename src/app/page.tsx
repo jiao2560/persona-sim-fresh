@@ -70,7 +70,7 @@ export default function InstructorPage() {
     <div className="p-8 max-w-2xl mx-auto">
       <div className="mb-6">
         <h1 className="text-3xl font-bold mb-2">Instructor Dashboard</h1>
-        <p className="text-gray-600">Generate realistic personas based on real GitHub projects in your domain</p>
+        <p className="text-gray-400">Generate realistic personas based on real GitHub projects in your domain</p>
       </div>
 
       <div className="space-y-4">
@@ -127,9 +127,9 @@ export default function InstructorPage() {
 "An e-commerce platform for small businesses. Target users include shop owners who want easy inventory management, customers who value simple checkout processes, and support staff who handle customer inquiries."`}
             value={stories}
             onChange={e => setStories(e.target.value)}
-            className="w-full px-4 py-2 border rounded h-32 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            className="w-full px-4 py-2 border rounded h-48 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
           />
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-gray-400 mt-1">
             💡 <strong>Pro tip:</strong> The system will analyze similar GitHub projects to create more realistic personas. Be specific about user types and their needs.
           </p>
         </div>
