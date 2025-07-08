@@ -57,24 +57,34 @@ export async function POST(req: Request) {
     console.log('Total requirements:', projectRequirements.length)
     console.log('Total messages:', messages.length)
     console.log('Generate report:', generateReport)
+    console.log('Project requirements:', projectRequirements) // Debug log
 
     // Extract only student questions and persona responses
     const interviewTranscript = messages
       .filter(msg => msg.sender !== 'system')
-      .map(msg => `${msg.sender === 'student' ? 'Student' : msg.personaName}: ${msg.content}`)
+      .map(msg => `${msg.sender === 'student' ? 'Student' : msg.personaName || 'Persona'}: ${msg.content}`)
       .join('\n\n')
+
+    console.log('Transcript sample:', interviewTranscript.substring(0, 500)) // Debug log
 
     // Analyze each requirement
     const requirementAnalyses: RequirementAnalysis[] = []
 
     for (const requirement of projectRequirements) {
+      console.log('Analyzing requirement:', requirement) // Debug log
       const analysis = await analyzeRequirementCoverage(requirement, interviewTranscript)
+      console.log('Analysis result:', analysis) // Debug log
       requirementAnalyses.push(analysis)
     }
 
-    // Calculate overall coverage
-    const coveredRequirements = requirementAnalyses.filter(r => r.covered).length
-    const overallCoverageRate = (coveredRequirements / projectRequirements.length) * 100
+    // Calculate overall coverage - using weighted average based on coverage scores
+    const totalScore = requirementAnalyses.reduce((sum, r) => sum + r.coverageScore, 0)
+    const maxPossibleScore = projectRequirements.length // Each requirement can score max 1.0
+    const overallCoverageRate = (totalScore / maxPossibleScore) * 100
+
+    console.log('Total score:', totalScore)
+    console.log('Max possible score:', maxPossibleScore)
+    console.log('Overall coverage rate:', overallCoverageRate)
 
     // Generate strengths and improvements
     const { strengths, improvements } = await generateFeedback(
@@ -124,46 +134,61 @@ async function analyzeRequirementCoverage(
   transcript: string
 ): Promise<RequirementAnalysis> {
   try {
-    const prompt = `Analyze if this requirement was adequately covered in the interview transcript.
+    // More specific prompt to avoid bias
+    const prompt = `You are analyzing a requirements elicitation interview transcript to determine if a specific requirement was discussed.
 
-REQUIREMENT: "${requirement}"
+REQUIREMENT TO CHECK: "${requirement}"
 
 INTERVIEW TRANSCRIPT:
 ${transcript.substring(0, 4000)} // Limit context to avoid token limits
 
-TASK:
-1. Determine if this requirement was discussed or elicited during the interview
-2. Find specific quotes from the transcript that relate to this requirement
-3. Rate how well it was covered on a scale of 0 to 1
-   - 0: Not mentioned at all
-   - 0.3: Briefly touched upon but not explored
-   - 0.6: Discussed with some detail
-   - 0.8: Well covered with good detail
-   - 1.0: Thoroughly explored with comprehensive detail
+ANALYSIS INSTRUCTIONS:
+1. Look for ANY mention or discussion related to this requirement
+2. Consider both direct and indirect references
+3. Check if the student asked questions that would elicit this requirement
+4. Look for persona responses that relate to this requirement
 
-FORMAT YOUR RESPONSE AS:
+SCORING GUIDELINES:
+- 0: Not mentioned at all, no related questions asked
+- 0.2: Vaguely related topic mentioned but requirement not addressed
+- 0.4: Requirement area touched but not specifically elicited
+- 0.6: Requirement partially discussed with some relevant details
+- 0.8: Requirement well covered with good follow-up questions
+- 1.0: Requirement thoroughly explored with comprehensive detail
+
+IMPORTANT: Be strict in your evaluation. Only mark as covered if the requirement was actually discussed, not just if related topics were mentioned.
+
+FORMAT YOUR RESPONSE EXACTLY AS:
 COVERED: [yes/no]
 SCORE: [0-1]
 EVIDENCE:
-- "Quote 1 from transcript"
-- "Quote 2 from transcript"
-(Maximum 3 quotes)
+- "Exact quote from transcript" (or "none" if not covered)
+- "Another quote if applicable"
 
-If not covered, write:
+Example of NOT covered:
 COVERED: no
 SCORE: 0
-EVIDENCE: none`
+EVIDENCE:
+- none
+
+Example of partially covered:
+COVERED: yes
+SCORE: 0.6
+EVIDENCE:
+- "Student: What kind of reporting features do you need?"
+- "Persona: We need daily sales reports"`
 
     const response = await cohere.chat({
       model: 'command-r-plus',
       message: prompt,
       maxTokens: 300,
-      temperature: 0.3, // Low temperature for consistent analysis
+      temperature: 0.2, // Lower temperature for more consistent analysis
     })
 
     const analysisText = response.text?.trim() || ''
+    console.log('Cohere response for requirement:', requirement, '\n', analysisText) // Debug log
 
-    // Parse the response
+    // Parse the response with better error handling
     const coveredMatch = analysisText.match(/COVERED:\s*(yes|no)/i)
     const scoreMatch = analysisText.match(/SCORE:\s*([\d.]+)/)
     const evidenceMatch = analysisText.match(/EVIDENCE:\s*([\s\S]*)/i)
@@ -171,13 +196,24 @@ EVIDENCE: none`
     const covered = coveredMatch?.[1]?.toLowerCase() === 'yes'
     const coverageScore = scoreMatch ? parseFloat(scoreMatch[1]) : 0
 
+    // Ensure consistency between covered and score
+    if (!covered && coverageScore > 0) {
+      console.warn('Inconsistency detected: not covered but score > 0')
+      return {
+        requirement,
+        covered: false,
+        evidence: [],
+        coverageScore: 0
+      }
+    }
+
     let evidence: string[] = []
-    if (evidenceMatch && evidenceMatch[1].trim() !== 'none') {
+    if (evidenceMatch && evidenceMatch[1].trim().toLowerCase() !== 'none') {
       evidence = evidenceMatch[1]
         .split('\n')
         .filter(line => line.trim().startsWith('-'))
         .map(line => line.replace(/^-\s*"?|"?$/g, '').trim())
-        .filter(quote => quote.length > 0)
+        .filter(quote => quote.length > 0 && quote.toLowerCase() !== 'none')
         .slice(0, 3) // Maximum 3 quotes
     }
 
@@ -208,32 +244,36 @@ async function generateFeedback(
     const coveredReqs = analyses.filter(a => a.covered).map(a => a.requirement)
     const missedReqs = analyses.filter(a => !a.covered).map(a => a.requirement)
     const partialReqs = analyses.filter(a => a.coverageScore > 0 && a.coverageScore < 0.6).map(a => a.requirement)
+    const wellCoveredReqs = analyses.filter(a => a.coverageScore >= 0.8).map(a => a.requirement)
 
-    const prompt = `Based on this requirements elicitation interview analysis, provide feedback for the student.
+    const prompt = `Based on this requirements elicitation interview analysis, provide specific and actionable feedback for the student.
 
 OVERALL COVERAGE: ${overallCoverage.toFixed(1)}%
+TOTAL REQUIREMENTS: ${analyses.length}
 
-COVERED REQUIREMENTS (${coveredReqs.length}):
-${coveredReqs.slice(0, 5).join('\n')}
+WELL COVERED REQUIREMENTS (score >= 0.8): ${wellCoveredReqs.length}
+${wellCoveredReqs.slice(0, 3).map(r => `- ${r}`).join('\n')}
 
-MISSED REQUIREMENTS (${missedReqs.length}):
-${missedReqs.slice(0, 5).join('\n')}
+PARTIALLY COVERED (0.2 < score < 0.6): ${partialReqs.length}
+${partialReqs.slice(0, 3).map(r => `- ${r}`).join('\n')}
 
-PARTIALLY COVERED (${partialReqs.length}):
-${partialReqs.slice(0, 5).join('\n')}
+MISSED REQUIREMENTS (score = 0): ${missedReqs.length}
+${missedReqs.slice(0, 3).map(r => `- ${r}`).join('\n')}
 
-Provide:
-1. 2-3 specific strengths about their interview technique
-2. 2-3 specific areas for improvement
+Based on this analysis, provide:
+1. 2-3 SPECIFIC strengths about what the student did well (be concrete, mention actual techniques used)
+2. 2-3 SPECIFIC areas for improvement (be actionable, suggest concrete techniques)
+
+Do NOT use generic feedback. Reference the actual performance data.
 
 FORMAT:
 STRENGTHS:
-- [Specific strength 1]
-- [Specific strength 2]
+- [Specific strength with example]
+- [Another specific strength]
 
 IMPROVEMENTS:
-- [Specific improvement 1]
-- [Specific improvement 2]`
+- [Specific actionable improvement]
+- [Another specific improvement]`
 
     const response = await cohere.chat({
       model: 'command-r-plus',
@@ -257,8 +297,13 @@ IMPROVEMENTS:
         .slice(0, 3)
     }
 
-    const strengths = strengthsMatch ? parsePoints(strengthsMatch[1]) : ['Good effort in conducting the interview']
-    const improvements = improvementsMatch ? parsePoints(improvementsMatch[1]) : ['Focus on exploring requirements in more detail']
+    const strengths = strengthsMatch ? parsePoints(strengthsMatch[1]) :
+      [`Completed the interview with ${overallCoverage.toFixed(1)}% coverage`]
+
+    const improvements = improvementsMatch ? parsePoints(improvementsMatch[1]) :
+      missedReqs.length > 0 ?
+        [`Focus on eliciting requirements about: ${missedReqs[0]}`, 'Ask more follow-up questions'] :
+        ['Explore requirements in greater depth', 'Ask more probing questions']
 
     return { strengths, improvements }
 
@@ -284,91 +329,109 @@ async function generateDetailedReport(
     const coveredReqs = analyses.filter(a => a.covered)
     const missedReqs = analyses.filter(a => !a.covered)
     const partialReqs = analyses.filter(a => a.coverageScore > 0 && a.coverageScore < 0.6)
+    const wellCoveredReqs = analyses.filter(a => a.coverageScore >= 0.8)
 
     // Calculate additional metrics
-    const avgCoverageScore = coveredReqs.length > 0
-      ? coveredReqs.reduce((sum, r) => sum + r.coverageScore, 0) / coveredReqs.length
+    const avgCoverageScore = analyses.length > 0
+      ? analyses.reduce((sum, r) => sum + r.coverageScore, 0) / analyses.length
       : 0
 
     const studentQuestions = messages.filter(m => m.sender === 'student').length
     const personaResponses = messages.filter(m => m.sender === 'persona').length
 
-    const prompt = `Generate a comprehensive instructor report for this requirements elicitation interview session.
+    // Calculate grade based on coverage
+    const gradeInfo = overallCoverage >= 85 ? { grade: 'A', desc: 'Excellent' } :
+                     overallCoverage >= 75 ? { grade: 'B', desc: 'Good' } :
+                     overallCoverage >= 65 ? { grade: 'C', desc: 'Satisfactory' } :
+                     overallCoverage >= 55 ? { grade: 'D', desc: 'Needs Improvement' } :
+                     { grade: 'F', desc: 'Insufficient' }
 
-STUDENT: ${studentName}
-SESSION: ${sessionId}
-OVERALL COVERAGE: ${overallCoverage.toFixed(1)}%
-AVERAGE COVERAGE QUALITY: ${(avgCoverageScore * 100).toFixed(1)}%
-TOTAL REQUIREMENTS: ${analyses.length}
-COVERED: ${coveredReqs.length}
-MISSED: ${missedReqs.length}
-PARTIALLY COVERED: ${partialReqs.length}
-STUDENT QUESTIONS: ${studentQuestions}
-PERSONA RESPONSES: ${personaResponses}
+    let report = `# Requirements Coverage Analysis Report\n\n`
+    report += `**Student:** ${studentName}\n`
+    report += `**Session ID:** ${sessionId}\n`
+    report += `**Date:** ${new Date().toLocaleDateString()}\n`
+    report += `**Time:** ${new Date().toLocaleTimeString()}\n\n`
 
-STRENGTHS:
-${strengths.map(s => `- ${s}`).join('\n')}
+    report += `## Executive Summary\n\n`
+    report += `The student achieved an overall requirements coverage of **${overallCoverage.toFixed(1)}%**, `
+    report += `successfully eliciting ${coveredReqs.length} out of ${analyses.length} project requirements. `
+    report += `The interview consisted of ${studentQuestions} student questions and ${personaResponses} persona responses.\n\n`
 
-IMPROVEMENTS:
-${improvements.map(i => `- ${i}`).join('\n')}
+    report += `## Performance Metrics\n\n`
+    report += `| Metric | Value |\n`
+    report += `|--------|-------|\n`
+    report += `| Overall Coverage Rate | ${overallCoverage.toFixed(1)}% |\n`
+    report += `| Average Coverage Quality | ${(avgCoverageScore * 100).toFixed(1)}% |\n`
+    report += `| Requirements Well-Covered (≥80%) | ${wellCoveredReqs.length} |\n`
+    report += `| Requirements Partially Covered | ${partialReqs.length} |\n`
+    report += `| Requirements Missed | ${missedReqs.length} |\n`
+    report += `| Total Student Questions | ${studentQuestions} |\n`
+    report += `| Questions per Requirement | ${(studentQuestions / analyses.length).toFixed(1)} |\n\n`
 
-Generate a detailed report that includes:
-1. Executive summary of the student's performance
-2. Analysis of interview technique and question quality
-3. Specific examples of good and poor elicitation practices
-4. Recommendations for skill development
-5. Grade recommendation based on coverage and technique
+    report += `## Grade Assessment\n\n`
+    report += `**Grade: ${gradeInfo.grade} (${gradeInfo.desc})**\n\n`
+    report += `Based on ${overallCoverage.toFixed(1)}% coverage and interview quality.\n\n`
 
-Format the report in a professional, constructive tone suitable for instructor review.`
-
-    const response = await cohere.chat({
-      model: 'command-r-plus',
-      message: prompt,
-      maxTokens: 800,
-      temperature: 0.6,
+    report += `## Strengths\n\n`
+    strengths.forEach(s => {
+      report += `- ${s}\n`
     })
+    report += `\n`
 
-    const report = response.text?.trim() || 'Unable to generate detailed report.'
+    report += `## Areas for Improvement\n\n`
+    improvements.forEach(i => {
+      report += `- ${i}\n`
+    })
+    report += `\n`
 
-    // Add requirement details to the report
-    let enhancedReport = `# Requirements Coverage Analysis Report\n\n`
-    enhancedReport += `**Student:** ${studentName}\n`
-    enhancedReport += `**Session ID:** ${sessionId}\n`
-    enhancedReport += `**Date:** ${new Date().toLocaleDateString()}\n\n`
-    enhancedReport += `## Performance Metrics\n`
-    enhancedReport += `- **Overall Coverage Rate:** ${overallCoverage.toFixed(1)}%\n`
-    enhancedReport += `- **Average Coverage Quality:** ${(avgCoverageScore * 100).toFixed(1)}%\n`
-    enhancedReport += `- **Requirements Covered:** ${coveredReqs.length}/${analyses.length}\n`
-    enhancedReport += `- **Student Questions:** ${studentQuestions}\n`
-    enhancedReport += `- **Interview Length:** ${messages.length} total messages\n\n`
+    report += `## Detailed Requirement Breakdown\n\n`
 
-    enhancedReport += report + '\n\n'
-
-    enhancedReport += `## Detailed Requirement Breakdown\n\n`
-
-    if (coveredReqs.length > 0) {
-      enhancedReport += `### Well-Covered Requirements\n`
-      coveredReqs
+    if (wellCoveredReqs.length > 0) {
+      report += `### Excellent Coverage (≥80%)\n\n`
+      analyses
+        .filter(a => a.coverageScore >= 0.8)
         .sort((a, b) => b.coverageScore - a.coverageScore)
         .slice(0, 5)
         .forEach(req => {
-          enhancedReport += `- **${req.requirement}** (Score: ${(req.coverageScore * 100).toFixed(0)}%)\n`
+          report += `**${req.requirement}** (${(req.coverageScore * 100).toFixed(0)}%)\n`
           if (req.evidence.length > 0) {
-            enhancedReport += `  - Evidence: "${req.evidence[0]}"\n`
+            report += `- Evidence: "${req.evidence[0].substring(0, 100)}..."\n`
           }
+          report += `\n`
         })
-      enhancedReport += '\n'
+    }
+
+    if (partialReqs.length > 0) {
+      report += `### Partial Coverage (20-60%)\n\n`
+      analyses
+        .filter(a => a.coverageScore > 0.2 && a.coverageScore < 0.6)
+        .slice(0, 5)
+        .forEach(req => {
+          report += `**${req.requirement}** (${(req.coverageScore * 100).toFixed(0)}%)\n`
+          report += `- Recommendation: Ask more specific follow-up questions about this requirement\n\n`
+        })
     }
 
     if (missedReqs.length > 0) {
-      enhancedReport += `### Missed Requirements\n`
-      missedReqs.slice(0, 5).forEach(req => {
-        enhancedReport += `- ${req.requirement}\n`
+      report += `### Missed Requirements\n\n`
+      report += `The following requirements were not addressed during the interview:\n\n`
+      missedReqs.slice(0, 10).forEach(req => {
+        report += `- ${req.requirement}\n`
       })
-      enhancedReport += '\n'
+      report += `\n`
     }
 
-    return enhancedReport
+    report += `## Recommendations for Next Interview\n\n`
+    report += `1. **Pre-interview Planning**: Review all requirements before starting and create a checklist\n`
+    report += `2. **Systematic Approach**: Address each requirement area methodically\n`
+    report += `3. **Follow-up Questions**: When a requirement area is mentioned, dig deeper with "why", "how", and "what if" questions\n`
+    report += `4. **Time Management**: Allocate time proportionally to ensure all requirements are covered\n`
+
+    if (missedReqs.length > 3) {
+      report += `5. **Priority Focus**: In your next interview, prioritize these missed areas: ${missedReqs.slice(0, 3).map(r => r.requirement).join(', ')}\n`
+    }
+
+    return report
 
   } catch (error) {
     console.error('Error generating detailed report:', error)
