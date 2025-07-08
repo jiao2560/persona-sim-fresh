@@ -102,8 +102,8 @@ class InterviewWorkflow {
 
     analyze_input ────────────────► route_to_personas
          │                              │
-         └─► [CONDITIONAL: retry if     │
-             confidence < 0.4]          ▼
+                                        │
+                                        ▼
                                 collaborative_discussion ◄─── [CONDITIONAL: if collaboration detected]
                                        │
                                        ▼
@@ -115,11 +115,9 @@ class InterviewWorkflow {
                                  ▼            └─► [CONDITIONAL: retry if
                             format_output         validation fails]
 
-    summarize_context ◄─── [CONDITIONAL: every N turns]
-         │
-         └────────────────► route_to_personas
 
-    EDGE PRIORITY: Conditional edges override static edges
+
+
     */
 
     // Define workflow nodes
