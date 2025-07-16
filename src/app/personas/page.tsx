@@ -20,6 +20,7 @@ interface Reference {
 interface PersonaData {
   personas: Persona[]
   projectOutline?: string
+  requirements?: string[]
   references?: Reference[]
   metadata?: {
     searchQuery: string
@@ -32,6 +33,12 @@ export default function PersonasPage() {
   const [data, setData] = useState<PersonaData>({ personas: [] })
   const [originalRequest, setOriginalRequest] = useState<any>(null)
   const [isRegenerating, setIsRegenerating] = useState(false)
+  const [isEditingRequirements, setIsEditingRequirements] = useState(false)
+  const [editableRequirements, setEditableRequirements] = useState<string[]>([])
+  const [newRequirement, setNewRequirement] = useState('')
+  const [showRegenerateModal, setShowRegenerateModal] = useState(false)
+  const [customRequirements, setCustomRequirements] = useState<string[]>([])
+  const [customRequirementInput, setCustomRequirementInput] = useState('')
   const router = useRouter()
 
   useEffect(() => {
@@ -48,6 +55,10 @@ export default function PersonasPage() {
         setData({ personas: parsedData })
       } else {
         setData(parsedData)
+        // Initialize editable requirements
+        if (parsedData.requirements) {
+          setEditableRequirements(parsedData.requirements)
+        }
       }
 
       if (requestRaw) {
@@ -59,6 +70,55 @@ export default function PersonasPage() {
     }
   }, [router])
 
+  const handleStartEdit = () => {
+    setIsEditingRequirements(true)
+    setEditableRequirements(data.requirements || [])
+  }
+
+  const handleSaveRequirements = () => {
+    const updatedData = {
+      ...data,
+      requirements: editableRequirements
+    }
+    setData(updatedData)
+    sessionStorage.setItem('personas', JSON.stringify(updatedData))
+    setIsEditingRequirements(false)
+  }
+
+  const handleCancelEdit = () => {
+    setIsEditingRequirements(false)
+    setEditableRequirements(data.requirements || [])
+    setNewRequirement('')
+  }
+
+  const handleAddRequirement = () => {
+    if (newRequirement.trim()) {
+      setEditableRequirements([...editableRequirements, newRequirement.trim()])
+      setNewRequirement('')
+    }
+  }
+
+  const handleDeleteRequirement = (index: number) => {
+    setEditableRequirements(editableRequirements.filter((_, i) => i !== index))
+  }
+
+  const handleUpdateRequirement = (index: number, value: string) => {
+    const updated = [...editableRequirements]
+    updated[index] = value
+    setEditableRequirements(updated)
+  }
+
+  const handleAddCustomRequirement = () => {
+    if (customRequirementInput.trim()) {
+      setCustomRequirements([...customRequirements, customRequirementInput.trim()])
+      setCustomRequirementInput('')
+    }
+  }
+
+  const handleDeleteCustomRequirement = (index: number) => {
+    setCustomRequirements(customRequirements.filter((_, i) => i !== index))
+  }
+
   const handleRegenerate = async () => {
     if (!originalRequest) {
       alert('Cannot regenerate - original request data not found')
@@ -66,12 +126,19 @@ export default function PersonasPage() {
     }
 
     setIsRegenerating(true)
+    setShowRegenerateModal(false)
 
     try {
+      // Include custom requirements in the regeneration request
+      const regenerateRequest = {
+        ...originalRequest,
+        customRequirements: customRequirements.length > 0 ? customRequirements : undefined
+      }
+
       const res = await fetch('/api/generate-personas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(originalRequest),
+        body: JSON.stringify(regenerateRequest),
       })
 
       if (!res.ok) {
@@ -80,9 +147,13 @@ export default function PersonasPage() {
 
       const newData = await res.json()
       setData(newData)
+      setEditableRequirements(newData.requirements || [])
 
       // Update session storage
       sessionStorage.setItem('personas', JSON.stringify(newData))
+
+      // Clear custom requirements after successful regeneration
+      setCustomRequirements([])
 
     } catch (error) {
       console.error('Regeneration error:', error)
@@ -92,7 +163,7 @@ export default function PersonasPage() {
     }
   }
 
-  const { personas, projectOutline, references, metadata } = data
+  const { personas, projectOutline, requirements, references, metadata } = data
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -112,7 +183,7 @@ export default function PersonasPage() {
             💬 Start Interview
           </button>
           <button
-            onClick={handleRegenerate}
+            onClick={() => setShowRegenerateModal(true)}
             disabled={isRegenerating || !originalRequest}
             className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
           >
@@ -150,6 +221,88 @@ export default function PersonasPage() {
           )}
         </div>
       )}
+
+      {/* Requirements Section */}
+      <div className="mb-8 p-6 bg-green-50 border border-green-200 rounded-lg">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold text-green-800">Project Requirements</h2>
+          {!isEditingRequirements ? (
+            <button
+              onClick={handleStartEdit}
+              className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+            >
+              ✏️ Edit Requirements
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveRequirements}
+                className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+              >
+                💾 Save
+              </button>
+              <button
+                onClick={handleCancelEdit}
+                className="px-3 py-1 bg-gray-500 text-white text-sm rounded hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+
+        {!isEditingRequirements ? (
+          <ul className="space-y-2">
+            {(requirements || editableRequirements).length > 0 ? (
+              (requirements || editableRequirements).map((req, i) => (
+                <li key={i} className="flex items-start">
+                  <span className="text-green-600 mr-2">•</span>
+                  <span className="text-gray-700">{req}</span>
+                </li>
+              ))
+            ) : (
+              <li className="text-gray-500 italic">No requirements generated yet. Click Edit to add some.</li>
+            )}
+          </ul>
+        ) : (
+          <div className="space-y-3">
+            {editableRequirements.map((req, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-green-600">•</span>
+                <input
+                  type="text"
+                  value={req}
+                  onChange={(e) => handleUpdateRequirement(i, e.target.value)}
+                  className="flex-1 px-2 py-1 border border-gray-300 rounded text-gray-700"
+                />
+                <button
+                  onClick={() => handleDeleteRequirement(i)}
+                  className="px-2 py-1 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+            <div className="flex items-center gap-2 mt-4">
+              <span className="text-green-600">•</span>
+              <input
+                type="text"
+                value={newRequirement}
+                onChange={(e) => setNewRequirement(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleAddRequirement()}
+                placeholder="Add new requirement..."
+                className="flex-1 px-2 py-1 border border-gray-300 rounded text-gray-700"
+              />
+              <button
+                onClick={handleAddRequirement}
+                className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Personas Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
@@ -210,6 +363,66 @@ export default function PersonasPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Regenerate Modal */}
+      {showRegenerateModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Regenerate Personas with Custom Requirements</h3>
+
+            <p className="text-sm text-gray-600 mb-4">
+              Optionally add custom requirements that should be included when regenerating personas:
+            </p>
+
+            <div className="space-y-3 mb-4 max-h-60 overflow-y-auto">
+              {customRequirements.map((req, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="text-green-600">•</span>
+                  <span className="flex-1 text-gray-700">{req}</span>
+                  <button
+                    onClick={() => handleDeleteCustomRequirement(i)}
+                    className="px-2 py-1 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 mb-6">
+              <input
+                type="text"
+                value={customRequirementInput}
+                onChange={(e) => setCustomRequirementInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleAddCustomRequirement()}
+                placeholder="Add custom requirement..."
+                className="flex-1 px-3 py-2 border border-gray-300 rounded text-black"
+              />
+              <button
+                onClick={handleAddCustomRequirement}
+                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+              >
+                Add
+              </button>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowRegenerateModal(false)}
+                className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRegenerate}
+                className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+              >
+                Regenerate with {customRequirements.length} Custom Requirements
+              </button>
+            </div>
           </div>
         </div>
       )}

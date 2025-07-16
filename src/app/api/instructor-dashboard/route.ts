@@ -185,7 +185,10 @@ export async function POST(req: Request) {
   }
 }
 
-// GET endpoint - Analyze coverage on demand
+// ... (keep all imports and interfaces the same)
+
+// In the GET endpoint - Analyze coverage on demand section, replace the analyze-coverage action:
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
@@ -222,200 +225,69 @@ export async function GET(req: Request) {
 
       console.log('Found session with', session.messages.length, 'messages')
 
-      // Build project context with more details
-      const projectContext = `
-Project: ${session.projectName || 'Software Development Project'}
-Domain: Requirements Elicitation Training
+      // Get the original persona data from sessionStorage to extract requirements
+      // This should be passed from the frontend, but as a fallback we'll generate basic requirements
+      let projectRequirements: string[] = []
 
-The student is interviewing personas to elicit requirements for a software system.
-Each persona has specific goals and concerns that should be addressed.
-
-Personas interviewed:
-${session.personasInterviewed.join(', ')}
-
-Number of messages: ${session.messages.length}
-Student questions: ${session.messages.filter((m: any) => m.sender === 'student').length}
-      `.trim()
-
-      // Build interview transcript
-      const transcript = session.messages
-        .filter((msg: any) => msg.sender !== 'system')
-        .map((msg: any) => `${msg.sender === 'student' ? 'Student' : msg.personaName || 'Persona'}: ${msg.content}`)
-        .join('\n\n')
-
-      console.log('Transcript length:', transcript.length, 'characters')
-      console.log('First 500 chars of transcript:', transcript.substring(0, 500))
-
-      // Call Cohere to analyze the transcript with improved prompt
       try {
-        const prompt = `You are an expert requirements engineering instructor analyzing a student's interview performance.
+        // Try to get requirements from the session metadata if stored
+        if (session.metadata?.projectRequirements) {
+          projectRequirements = session.metadata.projectRequirements
+        } else {
+          // Generate basic requirements based on project name and domain
+          // In production, these should come from the original persona generation
+          projectRequirements = [
+            'The system must provide user authentication and authorization',
+            'Users should be able to manage their profile information',
+            'The system must ensure data security and privacy',
+            'Users should be able to perform core domain-specific operations',
+            'The system must provide real-time updates and notifications',
+            'The system must have an intuitive and responsive user interface',
+            'Users should be able to export and import data',
+            'The system must maintain audit logs for compliance',
+            'The system must support multiple user roles and permissions',
+            'The system must handle errors gracefully and provide meaningful feedback'
+          ]
+          console.log('Using default requirements - should be replaced with actual project requirements')
+        }
+      } catch (error) {
+        console.error('Error getting project requirements:', error)
+      }
 
-PROJECT CONTEXT:
-${projectContext}
+      // Call the updated requirement coverage API
+      try {
+        const coverageUrl = `${baseUrl}/api/requirement-coverage`
+        console.log('Calling requirement coverage API...')
 
-INTERVIEW TRANSCRIPT:
-${transcript.substring(0, 6000)} // Increased limit for better context
-
-EVALUATION CRITERIA:
-1. Functional Requirements: Did they ask about what the system should do?
-2. Non-functional Requirements: Did they ask about performance, security, usability, reliability?
-3. User Goals: Did they understand what each persona wants to achieve?
-4. Pain Points: Did they explore current problems and frustrations?
-5. Constraints: Did they ask about limitations, budgets, timelines?
-6. Follow-up Questions: Did they probe deeper when given vague answers?
-7. Clarification: Did they ask for examples or specifics?
-8. Edge Cases: Did they explore unusual scenarios or error conditions?
-
-SCORING GUIDELINES (BE REALISTIC - most students score between 40-85%):
-- 85-100%: Exceptional - Covered all major requirement areas with excellent follow-ups
-- 75-84%: Very Good - Solid coverage with good techniques, missed some details
-- 65-74%: Good - Covered basics well but missed important follow-ups
-- 55-64%: Adequate - Got some requirements but significant gaps
-- 45-54%: Below Average - Minimal effective elicitation
-- 35-44%: Poor - Failed to elicit most key requirements
-- Below 35%: Very Poor - Interview was ineffective
-
-IMPORTANT: Base your score on actual evidence from the transcript. Consider:
-- With ${session.messages.filter((m: any) => m.sender === 'student').length} student questions, what coverage is realistic?
-- Short interviews (< 10 questions) rarely achieve > 70% coverage
-- Look for specific requirement areas that were missed
-- Don't default to 75% - vary your scores based on actual performance
-
-FORMAT YOUR RESPONSE EXACTLY AS:
-COVERAGE: [realistic percentage between 20-95]
-STRENGTHS:
-- [Specific strength with example from transcript]
-- [Another specific strength with evidence]
-IMPROVEMENTS:
-- [Specific missed requirement area]
-- [Concrete suggestion for improvement]
-SUMMARY: [2-3 sentences with specific observations about this interview]`
-
-        console.log('Calling Cohere API with improved prompt...')
-        const response = await cohere.chat({
-          model: 'command-r-plus',
-          message: prompt,
-          maxTokens: 600,
-          temperature: 0.7, // Increased for more variation
+        const coverageResponse = await fetch(coverageUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: session.messages,
+            projectRequirements,
+            studentName: session.studentName,
+            sessionId: session.sessionId,
+            generateReport: true
+          })
         })
 
-        const responseText = response.text || ''
-        console.log('Cohere full response:', responseText)
-
-        // Parse the response with better error handling
-        const coverageMatch = responseText.match(/COVERAGE:\s*(\d+)/i)
-        const strengthsMatch = responseText.match(/STRENGTHS:\s*([\s\S]*?)(?=IMPROVEMENTS:|$)/i)
-        const improvementsMatch = responseText.match(/IMPROVEMENTS:\s*([\s\S]*?)(?=SUMMARY:|$)/i)
-        const summaryMatch = responseText.match(/SUMMARY:\s*([\s\S]*)/i)
-
-        let coverage = 50 // default
-
-        if (coverageMatch) {
-          coverage = parseInt(coverageMatch[1])
-          console.log('Parsed coverage from Cohere:', coverage)
-        } else {
-          // Fallback calculation based on interview metrics
-          console.log('No coverage match found, using fallback calculation')
-
-          const studentMessages = session.messages.filter((m: any) => m.sender === 'student').length
-          const totalMessages = session.messages.length
-          const avgWordsPerQuestion = session.messages
-            .filter((m: any) => m.sender === 'student')
-            .reduce((sum: number, m: any) => sum + m.content.split(' ').length, 0) / (studentMessages || 1)
-
-          // More nuanced calculation
-          let calculatedCoverage = 25 // base score
-
-          // Points for number of questions (max 35 points)
-          if (studentMessages <= 3) calculatedCoverage += 10
-          else if (studentMessages <= 5) calculatedCoverage += 20
-          else if (studentMessages <= 8) calculatedCoverage += 30
-          else calculatedCoverage += 35
-
-          // Points for question quality (max 25 points)
-          if (avgWordsPerQuestion < 5) calculatedCoverage += 5
-          else if (avgWordsPerQuestion < 10) calculatedCoverage += 15
-          else calculatedCoverage += 25
-
-          // Points for engagement (max 15 points)
-          const engagementRatio = totalMessages > 0 ? studentMessages / totalMessages : 0
-          calculatedCoverage += Math.min(engagementRatio * 30, 15)
-
-          coverage = Math.round(calculatedCoverage)
-
-          console.log('Fallback calculation details:', {
-            studentMessages,
-            avgWordsPerQuestion,
-            engagementRatio,
-            calculatedCoverage: coverage
-          })
+        if (!coverageResponse.ok) {
+          throw new Error('Failed to analyze coverage')
         }
 
-        // Ensure coverage is within reasonable bounds
-        coverage = Math.max(20, Math.min(95, coverage))
-        console.log('Final coverage after bounds check:', coverage)
+        const coverageData = await coverageResponse.json()
+        console.log('Coverage analysis complete:', {
+          coverage: coverageData.overallCoverageRate,
+          questionQuality: coverageData.questionQualityScore
+        })
 
-        const parsePoints = (text: string): string[] => {
-          if (!text) return []
-          return text
-            .split('\n')
-            .filter(line => line.trim().startsWith('-'))
-            .map(line => line.replace(/^-\s*/, '').trim())
-            .filter(point => point.length > 0)
-            .slice(0, 3)
-        }
-
-        const strengths = strengthsMatch ? parsePoints(strengthsMatch[1]) :
-          ['Initiated conversation with personas', 'Asked some relevant questions']
-        const improvements = improvementsMatch ? parsePoints(improvementsMatch[1]) :
-          ['Explore non-functional requirements', 'Ask more follow-up questions', 'Probe deeper into user needs']
-        const summary = summaryMatch ? summaryMatch[1].trim() :
-          `The student conducted an interview with ${session.personasInterviewed.length} personas. Coverage analysis shows room for improvement in requirements elicitation techniques.`
-
-        console.log('Parsed strengths:', strengths)
-        console.log('Parsed improvements:', improvements)
-
-        // Generate detailed report with actual coverage
-        const detailedReport = `# Requirements Coverage Analysis Report
-
-**Session ID:** ${sessionId}
-**Student:** ${session.studentName}
-**Coverage Rate:** ${coverage}%
-**Analysis Date:** ${new Date().toLocaleDateString()}
-
-## Executive Summary
-${summary}
-
-## Performance Metrics
-- Total Messages: ${session.messages.length}
-- Student Questions: ${session.messages.filter((m: any) => m.sender === 'student').length}
-- Personas Interviewed: ${session.personasInterviewed.join(', ')}
-- Interview Duration: ${Math.round((new Date(session.endTime || session.startTime).getTime() - new Date(session.startTime).getTime()) / 1000 / 60)} minutes
-
-## Strengths
-${strengths.map(s => `- ${s}`).join('\n')}
-
-## Areas for Improvement
-${improvements.map(i => `- ${i}`).join('\n')}
-
-## Recommendations
-Based on the ${coverage}% coverage rate, the student should focus on:
-${improvements.map((imp, idx) => `${idx + 1}. ${imp}`).join('\n')}
-
-## Grade Recommendation
-${coverage >= 85 ? 'Excellent (A)' :
-  coverage >= 75 ? 'Very Good (B+)' :
-  coverage >= 65 ? 'Good (B)' :
-  coverage >= 55 ? 'Satisfactory (C)' :
-  coverage >= 45 ? 'Below Average (D)' :
-  'Needs Significant Improvement (F)'} - ${coverage}% coverage achieved`
-
+        // Create a simplified report for the dashboard
         const report: CoverageReport = {
-          overallCoverageRate: coverage,
-          strengths,
-          improvements,
-          detailedAnalysis: detailedReport,
-          analyzedAt: new Date()
+          overallCoverageRate: coverageData.overallCoverageRate,
+          strengths: coverageData.strengths,
+          improvements: coverageData.improvements,
+          detailedAnalysis: coverageData.detailedAnalysis || '',
+          analyzedAt: new Date(coverageData.analyzedAt)
         }
 
         // Cache the report
@@ -424,22 +296,23 @@ ${coverage >= 85 ? 'Excellent (A)' :
 
         return NextResponse.json({
           success: true,
-          coverage,
-          report
+          coverage: coverageData.overallCoverageRate,
+          report,
+          questionQuality: coverageData.questionQualityScore,
+          requirementsCovered: coverageData.requirementAnalyses.filter((r: any) => r.covered).length,
+          totalRequirements: coverageData.requirementAnalyses.length
         })
 
-      } catch (cohereError) {
-        console.error('Cohere API error:', cohereError)
+      } catch (analysisError) {
+        console.error('Coverage analysis error:', analysisError)
 
-        // More sophisticated fallback
-        const studentQuestions = session.messages.filter((m: any) => m.sender === 'student').length
-        const fallbackCoverage = Math.min(95, Math.max(20, 30 + (studentQuestions * 5)))
-
+        // Fallback response
+        const fallbackCoverage = 35 // Lower default
         const fallbackReport: CoverageReport = {
           overallCoverageRate: fallbackCoverage,
-          strengths: ['Engaged with personas', 'Completed the interview session'],
-          improvements: ['Ask more detailed questions', 'Explore requirements more thoroughly'],
-          detailedAnalysis: `Analysis based on interview metrics. Student asked ${studentQuestions} questions.`,
+          strengths: ['Attempted to conduct interview'],
+          improvements: ['Ask more specific questions', 'Avoid asking directly for requirements', 'Explore user needs in depth'],
+          detailedAnalysis: `Unable to perform detailed analysis. Please ensure questions are professional and targeted.`,
           analyzedAt: new Date()
         }
 
@@ -451,27 +324,7 @@ ${coverage >= 85 ? 'Excellent (A)' :
       }
     }
 
-    // Get cached report
-    if (action === 'get-report' && sessionId) {
-      console.log('Getting cached report for session:', sessionId)
-      const report = coverageReports.get(sessionId)
-      if (report) {
-        console.log('Found cached report')
-        return NextResponse.json({ report })
-      } else {
-        console.log('No cached report found')
-        return NextResponse.json(
-          { error: 'Report not found. Please analyze first.' },
-          { status: 404 }
-        )
-      }
-    }
-
-    return NextResponse.json(
-      { error: 'Invalid action' },
-      { status: 400 }
-    )
-
+    // ... (keep the rest of the GET endpoint the same)
   } catch (error) {
     console.error('Error in GET:', error)
     return NextResponse.json(

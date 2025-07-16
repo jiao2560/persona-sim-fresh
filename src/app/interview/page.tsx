@@ -73,46 +73,66 @@ export default function InterviewPage() {
     }
   }, [router])
 
-  // Helper function to save session data
-  const saveSessionData = async (
-    session: InterviewSession,
-    status: 'active' | 'completed' | 'abandoned' = 'active',
-    requirementsExtracted: boolean = false,
-    transcriptDownloaded: boolean = false
-  ) => {
-    try {
-      const projectData = sessionStorage.getItem('originalRequest')
-      const projectName = projectData ? JSON.parse(projectData).projectName : 'Unknown Project'
+  // In the interview/page.tsx file, update the saveSessionData function:
 
-      // Generate a student name (in production, this would come from login)
-      const studentName = `Student_${session.id.slice(-6)}`
+// Helper function to save session data
+const saveSessionData = async (
+  session: InterviewSession,
+  status: 'active' | 'completed' | 'abandoned' = 'active',
+  requirementsExtracted: boolean = false,
+  transcriptDownloaded: boolean = false
+) => {
+  try {
+    const projectData = sessionStorage.getItem('originalRequest')
+    const personaDataRaw = sessionStorage.getItem('personas')
+    const projectName = projectData ? JSON.parse(projectData).projectName : 'Unknown Project'
 
-      const sessionData = {
-        sessionId: session.id,
-        projectName,
-        studentName,
-        startTime: session.startTime,
-        endTime: status !== 'active' ? new Date() : undefined,
-        messages: session.messages,
-        personasInterviewed: session.selectedPersonas.map(p => p.name),
-        status,
-        requirementsExtracted,
-        transcriptDownloaded
+    // Extract project requirements from persona data
+    let projectRequirements: string[] = []
+    if (personaDataRaw) {
+      try {
+        const personaData = JSON.parse(personaDataRaw)
+        if (personaData.requirements && Array.isArray(personaData.requirements)) {
+          projectRequirements = personaData.requirements
+        }
+      } catch (e) {
+        console.error('Error parsing persona data for requirements:', e)
       }
-
-      const response = await fetch('/api/session-storage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sessionData)
-      })
-
-      if (response.ok) {
-        console.log('Session data saved successfully')
-      }
-    } catch (error) {
-      console.error('Failed to save session data:', error)
     }
+
+    // Generate a student name (in production, this would come from login)
+    const studentName = `Student_${session.id.slice(-6)}`
+
+    const sessionData = {
+      sessionId: session.id,
+      projectName,
+      studentName,
+      startTime: session.startTime,
+      endTime: status !== 'active' ? new Date() : undefined,
+      messages: session.messages,
+      personasInterviewed: session.selectedPersonas.map(p => p.name),
+      status,
+      requirementsExtracted,
+      transcriptDownloaded,
+      // Add metadata with project requirements
+      metadata: {
+        projectRequirements
+      }
+    }
+
+    const response = await fetch('/api/session-storage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sessionData)
+    })
+
+    if (response.ok) {
+      console.log('Session data saved successfully with requirements')
+    }
+  } catch (error) {
+    console.error('Failed to save session data:', error)
   }
+}
 
   const handlePersonaToggle = (persona: Persona) => {
     setSelectedPersonas(prev => {

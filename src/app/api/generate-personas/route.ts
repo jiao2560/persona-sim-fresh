@@ -107,11 +107,108 @@ async function fetchReadmeContent(owner: string, repo: string) {
   }
 }
 
+// Helper function to generate requirements
+async function generateRequirements(
+  projectName: string,
+  domain: string,
+  stories: string,
+  projectOutline: string,
+  customRequirements?: string[]
+): Promise<string[]> {
+  try {
+    const customReqContext = customRequirements && customRequirements.length > 0
+      ? `\n\nINSTRUCTOR-PROVIDED REQUIREMENTS (MUST INCLUDE):\n${customRequirements.map((r, i) => `${i + 1}. ${r}`).join('\n')}`
+      : ''
+
+    const requirementsPrompt = `Based on the project outline and context, generate a comprehensive list of project requirements.
+
+Project: ${projectName}
+Domain: ${domain}
+Description: ${stories}
+
+Project Outline:
+${projectOutline}
+${customReqContext}
+
+Generate 8-12 specific, actionable requirements for this project. Include both functional and non-functional requirements.
+Format each requirement as a clear, complete sentence starting with "The system must..." or "Users should be able to..."
+
+${customRequirements && customRequirements.length > 0
+  ? `IMPORTANT: Include all ${customRequirements.length} instructor-provided requirements in your list, integrating them naturally with the generated requirements.`
+  : ''}
+
+Return ONLY the requirements as a numbered list, no additional text.`
+
+    const response = await cohere.chat({
+      model: 'command-r-plus',
+      message: requirementsPrompt,
+      maxTokens: 500,
+      temperature: 0.6,
+    })
+
+    const requirementsText = response.text?.trim() || ''
+
+    // Parse the requirements from the response
+    const requirements = requirementsText
+      .split('\n')
+      .filter(line => line.trim() && /^\d+\./.test(line.trim()))
+      .map(line => line.replace(/^\d+\.\s*/, '').trim())
+      .filter(req => req.length > 0)
+
+    // If custom requirements were provided, ensure they're included
+    if (customRequirements && customRequirements.length > 0) {
+      const combinedRequirements = [...requirements]
+
+      // Add any custom requirements that might not have been included
+      customRequirements.forEach(customReq => {
+        const isIncluded = combinedRequirements.some(req =>
+          req.toLowerCase().includes(customReq.toLowerCase()) ||
+          customReq.toLowerCase().includes(req.toLowerCase())
+        )
+        if (!isIncluded) {
+          combinedRequirements.push(customReq)
+        }
+      })
+
+      return combinedRequirements
+    }
+
+    return requirements.length > 0 ? requirements : [
+      'The system must provide user authentication and authorization',
+      'Users should be able to manage their profile information',
+      'The system must ensure data security and privacy',
+      'Users should be able to perform core domain-specific operations',
+      'The system must provide an intuitive user interface',
+      'The system must handle errors gracefully and provide meaningful feedback'
+    ]
+
+  } catch (error) {
+    console.error('Error generating requirements:', error)
+
+    // Return default requirements with custom ones if provided
+    const defaultReqs = [
+      'The system must provide user authentication and authorization',
+      'Users should be able to manage their profile information',
+      'The system must ensure data security and privacy',
+      'Users should be able to perform core domain-specific operations',
+      'The system must provide an intuitive user interface',
+      'The system must handle errors gracefully and provide meaningful feedback'
+    ]
+
+    return customRequirements && customRequirements.length > 0
+      ? [...customRequirements, ...defaultReqs]
+      : defaultReqs
+  }
+}
+
 export async function POST(req: Request) {
   try {
     // 1. Parse incoming request
-    const { projectName, domain, stories, count } = await req.json()
+    const { projectName, domain, stories, count, customRequirements } = await req.json()
     const effectiveDomain = domain?.trim() || 'General'
+
+    console.log('=== PERSONA GENERATION REQUEST ===')
+    console.log('Custom requirements provided:', customRequirements?.length || 0)
 
     // 2. Search for related GitHub repositories
     console.log('=== GITHUB SEARCH DEBUG ===')
@@ -156,6 +253,10 @@ Context: ${stories}
 Related Repository Examples:
 ${repoReferences.map(repo => `- ${repo.name}: ${repo.description}`).join('\n')}
 
+${customRequirements && customRequirements.length > 0
+  ? `\nCustom Requirements to Consider:\n${customRequirements.map((r: string) => `- ${r}`).join('\n')}`
+  : ''}
+
 Provide only the project outline, no additional text.`
 
     const outlineResponse = await cohere.chat({
@@ -167,7 +268,16 @@ Provide only the project outline, no additional text.`
 
     const projectOutline = outlineResponse.text?.trim() || 'This project focuses on delivering solutions in the specified domain with attention to user needs and stakeholder requirements.'
 
-    // 5. Build enhanced persona generation prompt
+    // 5. Generate requirements based on project outline
+    const requirements = await generateRequirements(
+      projectName,
+      effectiveDomain,
+      stories,
+      projectOutline,
+      customRequirements
+    )
+
+    // 6. Build enhanced persona generation prompt
     const systemPrompt = `You are an expert at creating realistic stakeholder personas for software projects based on real-world examples and industry patterns.
 
 Generate exactly ${count} realistic personas as a JSON array. Each persona should be an object with these exact fields:
@@ -186,12 +296,16 @@ Return ONLY the JSON array, no other text.`
 Domain: ${effectiveDomain}
 Context & Requirements: ${stories}
 
+${requirements.length > 0
+  ? `\nKey Project Requirements:\n${requirements.slice(0, 5).map((r, i) => `${i + 1}. ${r}`).join('\n')}`
+  : ''}
+
 Real-world context from similar projects:
 ${readmeContents.length > 0 ? readmeContents.join('\n\n---\n\n').substring(0, 2000) : 'No additional context available'}
 
-Generate personas that would realistically be involved in a project like this, based on the patterns you see in similar real-world projects.`
+Generate personas that would realistically be involved in a project like this, based on the patterns you see in similar real-world projects. Consider the requirements when defining their goals and concerns.`
 
-    // 6. Call Cohere API for persona generation
+    // 7. Call Cohere API for persona generation
     const response = await cohere.chat({
       model: 'command-r-plus',
       message: `${systemPrompt}\n\n${contextualPrompt}`,
@@ -199,11 +313,11 @@ Generate personas that would realistically be involved in a project like this, b
       temperature: 0.8,
     })
 
-    // 7. Extract and clean the response text
+    // 8. Extract and clean the response text
     let rawText = response.text?.trim() || ''
     rawText = rawText.replace(/```json\s*|\s*```/g, '').trim()
 
-    // 8. Parse the JSON response
+    // 9. Parse the JSON response
     let personas = []
     try {
       personas = JSON.parse(rawText)
@@ -236,10 +350,11 @@ Generate personas that would realistically be involved in a project like this, b
       }))
     }
 
-    // 9. Return comprehensive response
+    // 10. Return comprehensive response
     return NextResponse.json({
       personas: personas.slice(0, count),
       projectOutline,
+      requirements,
       references: repoReferences,
       metadata: {
         searchQuery: `${effectiveDomain} ${stories}`,
@@ -256,6 +371,7 @@ Generate personas that would realistically be involved in a project like this, b
         error: 'Failed to generate personas',
         personas: [],
         projectOutline: 'Error generating project outline',
+        requirements: [],
         references: []
       },
       { status: 500 }

@@ -20,10 +20,13 @@ interface SessionData {
   status: 'active' | 'completed' | 'abandoned'
   requirementsExtracted: boolean
   transcriptDownloaded: boolean
+  metadata?: {
+    projectRequirements?: string[]
+    [key: string]: any
+  }
 }
 
 // In-memory storage (in production, use a real database)
-// This persists across API calls but resets when server restarts
 const sessionStorage = new Map<string, SessionData>()
 
 // GET: Retrieve all sessions for a project
@@ -64,7 +67,7 @@ export async function POST(req: Request) {
       )
     }
 
-    // Store the session data
+    // Store the session data with metadata
     sessionStorage.set(sessionData.sessionId, {
       ...sessionData,
       // Ensure dates are Date objects
@@ -73,10 +76,12 @@ export async function POST(req: Request) {
       messages: sessionData.messages.map(msg => ({
         ...msg,
         timestamp: new Date(msg.timestamp)
-      }))
+      })),
+      // Preserve metadata including project requirements
+      metadata: sessionData.metadata || {}
     })
 
-    console.log(`Session ${sessionData.sessionId} saved. Total sessions: ${sessionStorage.size}`)
+    console.log(`Session ${sessionData.sessionId} saved with metadata. Total sessions: ${sessionStorage.size}`)
 
     return NextResponse.json({
       success: true,
