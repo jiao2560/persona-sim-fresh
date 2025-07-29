@@ -28,12 +28,13 @@ interface Persona {
 
 interface TranscriptRequest {
   messages: Message[]
+  selectedMessageIds?: string[] // NEW: Optional selected message IDs
   personas: Persona[]
 }
 
 export async function POST(req: Request) {
   try {
-    const { messages, personas }: TranscriptRequest = await req.json()
+    const { messages, selectedMessageIds, personas }: TranscriptRequest = await req.json()
 
     if (!messages || messages.length === 0) {
       return NextResponse.json(
@@ -42,13 +43,27 @@ export async function POST(req: Request) {
       )
     }
 
+    // NEW: Filter messages if specific ones are selected
+    const relevantMessages = selectedMessageIds && selectedMessageIds.length > 0
+      ? messages.filter(m => selectedMessageIds.includes(m.id))
+      : messages
+
+    if (relevantMessages.length === 0) {
+      return NextResponse.json(
+        { error: 'No selected messages found' },
+        { status: 400 }
+      )
+    }
+
     console.log('=== GENERATING REQUIREMENTS FROM INTERVIEW ===')
     console.log('Total messages:', messages.length)
+    console.log('Messages to analyze:', relevantMessages.length)
+    console.log('Selected mode:', selectedMessageIds ? 'Yes' : 'No')
     console.log('Personas:', personas.map(p => p.name).join(', '))
 
-    // Build a simple transcript
+    // Build a transcript from selected messages
     let transcript = 'INTERVIEW TRANSCRIPT:\n\n'
-    messages.forEach(msg => {
+    relevantMessages.forEach(msg => {
       const speaker = msg.sender === 'student' ? 'STUDENT' : msg.personaName || 'PERSONA'
       transcript += `${speaker}: ${msg.content}\n\n`
     })
@@ -59,13 +74,19 @@ export async function POST(req: Request) {
       transcript += `${p.name} (${p.role}): Goal - ${p.goal}, Concerns - ${p.concerns}\n`
     })
 
-    // Simple prompt for Cohere
+    // Enhanced prompt for selective extraction
+    const selectionContext = selectedMessageIds && selectedMessageIds.length > 0
+      ? `\nNOTE: This is a SELECTED portion of the conversation (${relevantMessages.length} out of ${messages.length} messages). Focus only on requirements mentioned in these selected messages.\n`
+      : ''
+
     const prompt = `Analyze this interview transcript and extract project requirements.
 
 ${transcript}
-
+${selectionContext}
 Extract all project requirements mentioned in the conversation. Format as a numbered list (1, 2, 3, etc.).
 Each requirement should be clear and actionable. Include who mentioned it in brackets.
+
+${selectedMessageIds ? 'Since this is a partial selection, only extract requirements from the selected messages shown above.' : ''}
 
 Example format:
 1. The system must have user authentication [Source: John Smith]
@@ -84,12 +105,23 @@ List all requirements you find:`
     // Get the requirements from Cohere
     const extractedRequirements = response.text?.trim() || 'No requirements could be extracted.'
 
-    // Generate the final document
-    const requirements = generateRequirementsDocument(extractedRequirements, messages, personas)
+    // Generate the final document with context about selection
+    const requirements = generateRequirementsDocument(
+      extractedRequirements,
+      relevantMessages,
+      messages,
+      personas,
+      selectedMessageIds
+    )
 
     return NextResponse.json({
       requirements: requirements,
-      success: true
+      success: true,
+      metadata: {
+        totalMessages: messages.length,
+        analyzedMessages: relevantMessages.length,
+        selectionMode: !!selectedMessageIds
+      }
     })
 
   } catch (error) {
@@ -101,7 +133,13 @@ List all requirements you find:`
   }
 }
 
-function generateRequirementsDocument(extractedReqs: string, messages: Message[], personas: Persona[]): string {
+function generateRequirementsDocument(
+  extractedReqs: string,
+  relevantMessages: Message[],
+  allMessages: Message[],
+  personas: Persona[],
+  selectedMessageIds?: string[]
+): string {
   const lines: string[] = []
 
   // Header
@@ -111,9 +149,19 @@ function generateRequirementsDocument(extractedReqs: string, messages: Message[]
   lines.push('')
 
   // Session info
-  const startTime = new Date(messages[0]?.timestamp || Date.now())
+  const startTime = new Date(allMessages[0]?.timestamp || Date.now())
   lines.push(`Date: ${startTime.toLocaleDateString()}`)
   lines.push(`Stakeholders Interviewed: ${personas.map(p => p.name).join(', ')}`)
+
+  // NEW: Selection info
+  if (selectedMessageIds && selectedMessageIds.length > 0) {
+    lines.push(`Analysis Mode: Selected Messages`)
+    lines.push(`Messages Analyzed: ${relevantMessages.length} of ${allMessages.length} total messages`)
+  } else {
+    lines.push(`Analysis Mode: Full Conversation`)
+    lines.push(`Total Messages: ${allMessages.length}`)
+  }
+
   lines.push('')
 
   // Requirements
@@ -122,6 +170,14 @@ function generateRequirementsDocument(extractedReqs: string, messages: Message[]
   lines.push('')
   lines.push(extractedReqs)
   lines.push('')
+
+  // NEW: Add note about partial extraction if applicable
+  if (selectedMessageIds && selectedMessageIds.length > 0) {
+    lines.push('')
+    lines.push('NOTE: This extraction is based on selected messages only.')
+    lines.push('Additional requirements may exist in the unselected portions of the conversation.')
+    lines.push('')
+  }
 
   // Footer
   lines.push('=' .repeat(80))

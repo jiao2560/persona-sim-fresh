@@ -38,6 +38,11 @@ export default function InterviewPage() {
   const [projectData, setProjectData] = useState<any>(null)
   const [personaData, setPersonaData] = useState<any>(null)
   const [showProjectDetails, setShowProjectDetails] = useState(true)
+
+  // NEW: Text selection state
+  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set())
+  const [isSelectionMode, setIsSelectionMode] = useState(false)
+
   const router = useRouter()
 
   useEffect(() => {
@@ -73,66 +78,92 @@ export default function InterviewPage() {
     }
   }, [router])
 
-  // In the interview/page.tsx file, update the saveSessionData function:
+  // Helper function to save session data
+  const saveSessionData = async (
+    session: InterviewSession,
+    status: 'active' | 'completed' | 'abandoned' = 'active',
+    requirementsExtracted: boolean = false,
+    transcriptDownloaded: boolean = false
+  ) => {
+    try {
+      const projectData = sessionStorage.getItem('originalRequest')
+      const personaDataRaw = sessionStorage.getItem('personas')
+      const projectName = projectData ? JSON.parse(projectData).projectName : 'Unknown Project'
 
-// Helper function to save session data
-const saveSessionData = async (
-  session: InterviewSession,
-  status: 'active' | 'completed' | 'abandoned' = 'active',
-  requirementsExtracted: boolean = false,
-  transcriptDownloaded: boolean = false
-) => {
-  try {
-    const projectData = sessionStorage.getItem('originalRequest')
-    const personaDataRaw = sessionStorage.getItem('personas')
-    const projectName = projectData ? JSON.parse(projectData).projectName : 'Unknown Project'
-
-    // Extract project requirements from persona data
-    let projectRequirements: string[] = []
-    if (personaDataRaw) {
-      try {
-        const personaData = JSON.parse(personaDataRaw)
-        if (personaData.requirements && Array.isArray(personaData.requirements)) {
-          projectRequirements = personaData.requirements
+      // Extract project requirements from persona data
+      let projectRequirements: string[] = []
+      if (personaDataRaw) {
+        try {
+          const personaData = JSON.parse(personaDataRaw)
+          if (personaData.requirements && Array.isArray(personaData.requirements)) {
+            projectRequirements = personaData.requirements
+          }
+        } catch (e) {
+          console.error('Error parsing persona data for requirements:', e)
         }
-      } catch (e) {
-        console.error('Error parsing persona data for requirements:', e)
       }
-    }
 
-    // Generate a student name (in production, this would come from login)
-    const studentName = `Student_${session.id.slice(-6)}`
+      // Generate a student name (in production, this would come from login)
+      const studentName = `Student_${session.id.slice(-6)}`
 
-    const sessionData = {
-      sessionId: session.id,
-      projectName,
-      studentName,
-      startTime: session.startTime,
-      endTime: status !== 'active' ? new Date() : undefined,
-      messages: session.messages,
-      personasInterviewed: session.selectedPersonas.map(p => p.name),
-      status,
-      requirementsExtracted,
-      transcriptDownloaded,
-      // Add metadata with project requirements
-      metadata: {
-        projectRequirements
+      const sessionData = {
+        sessionId: session.id,
+        projectName,
+        studentName,
+        startTime: session.startTime,
+        endTime: status !== 'active' ? new Date() : undefined,
+        messages: session.messages,
+        personasInterviewed: session.selectedPersonas.map(p => p.name),
+        status,
+        requirementsExtracted,
+        transcriptDownloaded,
+        // Add metadata with project requirements
+        metadata: {
+          projectRequirements
+        }
       }
-    }
 
-    const response = await fetch('/api/session-storage', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(sessionData)
-    })
+      const response = await fetch('/api/session-storage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sessionData)
+      })
 
-    if (response.ok) {
-      console.log('Session data saved successfully with requirements')
+      if (response.ok) {
+        console.log('Session data saved successfully with requirements')
+      }
+    } catch (error) {
+      console.error('Failed to save session data:', error)
     }
-  } catch (error) {
-    console.error('Failed to save session data:', error)
   }
-}
+
+  // NEW: Toggle message selection
+  const toggleMessageSelection = (messageId: string) => {
+    if (!isSelectionMode) return
+
+    setSelectedMessages(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(messageId)) {
+        newSet.delete(messageId)
+      } else {
+        newSet.add(messageId)
+      }
+      return newSet
+    })
+  }
+
+  // NEW: Clear all selections
+  const clearSelections = () => {
+    setSelectedMessages(new Set())
+    setIsSelectionMode(false)
+  }
+
+  // NEW: Select all messages
+  const selectAllMessages = () => {
+    if (!currentSession) return
+    const allMessageIds = currentSession.messages.map(m => m.id)
+    setSelectedMessages(new Set(allMessageIds))
+  }
 
   const handlePersonaToggle = (persona: Persona) => {
     setSelectedPersonas(prev => {
@@ -258,9 +289,20 @@ const saveSessionData = async (
     }
   }
 
+  // MODIFIED: Generate requirements with selected messages
   const generateRequirements = async () => {
     if (!currentSession || currentSession.messages.length === 0) {
       alert('No interview session to analyze')
+      return
+    }
+
+    // Check if in selection mode and have selections
+    const messagesToAnalyze = isSelectionMode && selectedMessages.size > 0
+      ? currentSession.messages.filter(m => selectedMessages.has(m.id))
+      : currentSession.messages
+
+    if (messagesToAnalyze.length === 0) {
+      alert('Please select at least one message to analyze')
       return
     }
 
@@ -272,6 +314,9 @@ const saveSessionData = async (
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: currentSession.messages,
+          selectedMessageIds: isSelectionMode && selectedMessages.size > 0
+            ? Array.from(selectedMessages)
+            : undefined,
           personas: selectedPersonas
         })
       })
@@ -285,6 +330,9 @@ const saveSessionData = async (
       if (currentSession) {
         await saveSessionData(currentSession, 'active', true, transcriptDownloaded)
       }
+
+      // Clear selections after extraction
+      clearSelections()
 
     } catch (error) {
       console.error('Error generating requirements:', error)
@@ -326,6 +374,7 @@ const saveSessionData = async (
     setSelectedPersonas([])
     setRequirements(null)
     setTranscriptDownloaded(false)
+    clearSelections()
   }
 
   // Auto-save session every 30 seconds while active
@@ -349,7 +398,7 @@ const saveSessionData = async (
               <div className="flex justify-between items-center">
                 <div className="flex-1">
                   <h1 className="text-2xl font-bold text-gray-900">
-                    {projectData?.projectName || 'AlgoTradeSim'} {/* Use the project name from your screenshot */}
+                    {projectData?.projectName || 'AlgoTradeSim'}
                   </h1>
                   <p className="text-sm text-gray-600 mt-1">
                     {projectData?.domain || 'Finance'} Domain
@@ -511,9 +560,39 @@ const saveSessionData = async (
         </div>
 
         <div className="space-y-3">
+          {/* NEW: Selection mode toggle */}
+          {!isSelectionMode ? (
+            <button
+              onClick={() => setIsSelectionMode(true)}
+              className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 font-medium text-sm"
+            >
+              ✂️ Select Messages
+            </button>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <button
+                  onClick={selectAllMessages}
+                  className="flex-1 bg-purple-100 text-purple-700 py-2 px-3 rounded-lg hover:bg-purple-200 font-medium text-sm"
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={clearSelections}
+                  className="flex-1 bg-gray-100 text-gray-700 py-2 px-3 rounded-lg hover:bg-gray-200 font-medium text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+              <p className="text-xs text-purple-600 text-center">
+                Click messages to select • {selectedMessages.size} selected
+              </p>
+            </>
+          )}
+
           <button
             onClick={generateRequirements}
-            disabled={isGeneratingRequirements}
+            disabled={isGeneratingRequirements || (isSelectionMode && selectedMessages.size === 0)}
             className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium text-sm"
           >
             {isGeneratingRequirements ? (
@@ -521,18 +600,30 @@ const saveSessionData = async (
                 <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full inline-block mr-2"></div>
                 Generating...
               </>
+            ) : isSelectionMode && selectedMessages.size > 0 ? (
+              `📋 Extract from ${selectedMessages.size} messages`
             ) : (
-              '📋 Extract Requirements'
+              '📋 Extract All Requirements'
             )}
           </button>
 
           {requirements && (
-            <button
-              onClick={downloadRequirements}
-              className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 font-medium text-sm"
-            >
-              💾 Download Requirements
-            </button>
+            <>
+              <button
+                onClick={downloadRequirements}
+                className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 font-medium text-sm"
+              >
+                💾 Download Requirements
+              </button>
+
+              {/* Show extracted requirements preview */}
+              <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                <h4 className="font-medium text-gray-900 mb-2 text-sm">Extracted Requirements:</h4>
+                <div className="text-xs text-gray-600 max-h-32 overflow-y-auto">
+                  {requirements.substring(0, 200)}...
+                </div>
+              </div>
+            </>
           )}
 
           <button
@@ -542,15 +633,6 @@ const saveSessionData = async (
             End Interview
           </button>
         </div>
-
-        {requirements && (
-          <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-            <h4 className="font-medium text-gray-900 mb-2 text-sm">Generated Requirements:</h4>
-            <div className="text-xs text-gray-600 max-h-32 overflow-y-auto">
-              {requirements.substring(0, 200)}...
-            </div>
-          </div>
-        )}
 
         {transcriptDownloaded && (
           <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-700 text-center">
@@ -577,22 +659,38 @@ const saveSessionData = async (
               className={`flex ${msg.sender === 'student' ? 'justify-end' : 'justify-start'}`}
             >
               <div
-                className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg cursor-pointer transition-all ${
                   msg.sender === 'student'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-white border border-gray-200 text-gray-900'
-                }`}
+                    ? selectedMessages.has(msg.id) && isSelectionMode
+                      ? 'bg-purple-600 text-white ring-2 ring-purple-400'
+                      : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    : selectedMessages.has(msg.id) && isSelectionMode
+                    ? 'bg-purple-100 border-2 border-purple-400 text-gray-900'
+                    : 'bg-white border border-gray-200 text-gray-900 hover:border-gray-300'
+                } ${isSelectionMode ? 'cursor-pointer' : ''}`}
+                onClick={() => toggleMessageSelection(msg.id)}
               >
                 {msg.sender === 'persona' && msg.personaName && (
-                  <div className="text-xs font-semibold mb-1 text-indigo-600">
+                  <div className={`text-xs font-semibold mb-1 ${
+                    selectedMessages.has(msg.id) && isSelectionMode
+                      ? 'text-purple-700'
+                      : 'text-indigo-600'
+                  }`}>
                     {msg.personaName}
                   </div>
                 )}
                 <div className="text-sm">{msg.content}</div>
                 <div className={`text-xs mt-1 ${
-                  msg.sender === 'student' ? 'text-indigo-200' : 'text-gray-500'
+                  msg.sender === 'student'
+                    ? selectedMessages.has(msg.id) && isSelectionMode
+                      ? 'text-purple-200'
+                      : 'text-indigo-200'
+                    : 'text-gray-500'
                 }`}>
                   {msg.timestamp.toLocaleTimeString()}
+                  {selectedMessages.has(msg.id) && isSelectionMode && (
+                    <span className="ml-2">✓ Selected</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -609,15 +707,21 @@ const saveSessionData = async (
               onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
               placeholder="Ask your question..."
               className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-black"
+              disabled={isSelectionMode}
             />
             <button
               onClick={sendMessage}
-              disabled={!message.trim()}
+              disabled={!message.trim() || isSelectionMode}
               className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
               Send
             </button>
           </div>
+          {isSelectionMode && (
+            <p className="text-xs text-purple-600 mt-2">
+              Selection mode active - click messages above to select them for requirement extraction
+            </p>
+          )}
         </div>
       </div>
     </div>

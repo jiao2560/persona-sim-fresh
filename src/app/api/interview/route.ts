@@ -96,30 +96,6 @@ class InterviewWorkflow {
   }
 
   private buildWorkflow(): void {
-    /*
-    EDGE PRECEDENCE & FLOW DIAGRAM:
-    ================================
-
-    analyze_input ────────────────► route_to_personas
-         │                              │
-                                        │
-                                        ▼
-                                collaborative_discussion ◄─── [CONDITIONAL: if collaboration detected]
-                                       │
-                                       ▼
-                                generate_responses
-                                       │
-                                       ▼
-                                validate_responses
-                                 │            │
-                                 ▼            └─► [CONDITIONAL: retry if
-                            format_output         validation fails]
-
-
-
-
-    */
-
     // Define workflow nodes
     this.addNode('analyze_input', this.analyzeInputNode.bind(this))
     this.addNode('route_to_personas', this.routeToPersonasNode.bind(this))
@@ -224,6 +200,26 @@ class InterviewWorkflow {
     return 'general_consensus'
   }
 
+  private filterUnnecessaryContent(response: string): string {
+  // Remove overly enthusiastic or off-topic sentences
+  const unnecessaryPatterns = [
+    /It's an exciting prospect[^.!?]*[.!?]/gi,
+    /I know many of us are keen[^.!?]*[.!?]/gi,
+    /can't wait to[^.!?]*[.!?]/gi,
+    /looking forward to[^.!?]*[.!?]/gi,
+    /I'm excited about[^.!?]*[.!?]/gi,
+    /This is exciting[^.!?]*[.!?]/gi
+  ];
+
+  let filtered = response;
+  unnecessaryPatterns.forEach(pattern => {
+    filtered = filtered.replace(pattern, '').trim();
+  });
+
+  // Remove double spaces and clean up
+  return filtered.replace(/\s+/g, ' ').trim();
+}
+
   // Enhanced out-of-character detection
   private isOutOfCharacter(content: string): boolean {
     const oocPhrases = [
@@ -232,6 +228,257 @@ class InterviewWorkflow {
     ]
     const lowerContent = content.toLowerCase()
     return oocPhrases.some(phrase => lowerContent.includes(phrase))
+  }
+
+  // NEW: Helper function to define role knowledge boundaries
+  private getRoleKnowledgeBoundaries(role: string): string {
+    const boundaries: Record<string, string> = {
+      'Student': `- Your own learning experiences and challenges
+- Peer experiences and student community feedback
+- Project requirements from a student's perspective
+- Study habits, collaboration with classmates
+- What you need from instructors and the system`,
+
+      'Instructor': `- Teaching methods and curriculum design
+- Grading criteria and evaluation processes
+- Student performance and learning outcomes
+- Course management and educational goals
+- Academic policies and teaching challenges`,
+
+      'Administrator': `- System architecture and technical specifications
+- Infrastructure capacity and limitations
+- Security policies and compliance requirements
+- Budget constraints and resource allocation
+- System-wide metrics and performance data`,
+
+      'Project Manager': `- Project timelines and milestones
+- Resource allocation and team coordination
+- Risk assessment and mitigation strategies
+- Stakeholder communication and expectations
+- Project scope and deliverables`,
+
+      'IT Support': `- Technical troubleshooting and user assistance
+- System features and functionality
+- Common technical issues and solutions
+- User training and documentation
+- Help desk procedures and SLAs`,
+
+      'End User': `- Daily usage experiences and pain points
+- Feature requests and usability feedback
+- Personal workflow and productivity needs
+- User interface preferences
+- Basic functionality understanding`
+    }
+
+    return boundaries[role] || boundaries['End User']
+  }
+
+  // NEW: Helper function to get role validation keywords
+  private getRoleValidationKeywords(role: string): { forbidden: string[], allowed: string[] } {
+    const keywords: Record<string, { forbidden: string[], allowed: string[] }> = {
+      'Student': {
+        forbidden: ['system capacity', 'infrastructure', 'budget', 'server', 'database size', 'total users', 'system-wide', 'all students', 'entire system'],
+        allowed: ['my peers', 'fellow students', 'classmates', 'our group', 'study group', 'my experience', 'as a student']
+      },
+      'Instructor': {
+        forbidden: ['system architecture', 'server capacity', 'database', 'infrastructure', 'total system users', 'budget allocation'],
+        allowed: ['my students', 'grading', 'teaching', 'course', 'curriculum', 'evaluation', 'learning outcomes']
+      },
+      'Administrator': {
+        forbidden: ['personal grades', 'individual student needs', 'teaching methods', 'course content'],
+        allowed: ['system capacity', 'users', 'infrastructure', 'security', 'compliance', 'system-wide', 'performance metrics']
+      }
+    }
+
+    return keywords[role] || { forbidden: [], allowed: [] }
+  }
+
+  // NEW: Helper function to get inappropriate examples for role
+  private getRoleInappropriateExamples(role: string): string {
+    const examples: Record<string, string> = {
+      'Student': `- System capacity or total number of users
+- Infrastructure details or technical architecture
+- Budget or resource allocation decisions
+- Administrative policies or system-wide metrics`,
+
+      'Instructor': `- Technical infrastructure or system architecture
+- Total system capacity or user counts
+- Budget details or financial allocations
+- IT implementation details`,
+
+      'Administrator': `- Individual student experiences or personal challenges
+- Specific teaching methodologies or grading approaches
+- Course content or curriculum details
+- Personal academic performance`
+    }
+
+    return examples[role] || 'Information outside your direct experience or role'
+  }
+
+  // NEW: Validate if response is role-appropriate
+  private validateRoleAppropriateResponse(
+    content: string,
+    role: string,
+    keywords: { forbidden: string[], allowed: string[] },
+    originalQuestion: string
+  ): { isValid: boolean, reason?: string, suggestedPersona?: string } {
+    const lowerContent = content.toLowerCase()
+    const lowerQuestion = originalQuestion.toLowerCase()
+
+    // Check for forbidden keywords
+    for (const forbidden of keywords.forbidden) {
+      if (lowerContent.includes(forbidden)) {
+        // Determine who should answer based on the forbidden topic
+        let suggestedPersona = 'Administrator'
+        if (forbidden.includes('teaching') || forbidden.includes('grading')) {
+          suggestedPersona = 'Instructor'
+        } else if (forbidden.includes('student') || forbidden.includes('peer')) {
+          suggestedPersona = 'Student'
+        }
+
+        return {
+          isValid: false,
+          reason: `Contains forbidden topic: ${forbidden}`,
+          suggestedPersona
+        }
+      }
+    }
+
+    // Special case: if asked about "how many users" and role is not Administrator
+    if (lowerQuestion.includes('how many') && lowerQuestion.includes('user') && role !== 'Administrator') {
+      return {
+        isValid: false,
+        reason: 'User count question should be handled by Administrator',
+        suggestedPersona: 'Administrator'
+      }
+    }
+
+    return { isValid: true }
+  }
+
+  // NEW: Generate role-appropriate deflection
+  private generateRoleAppropriateDeflection(
+    persona: Persona,
+    question: string,
+    suggestedPersona?: string
+  ): string {
+    const personalityDeflections: Record<string, string[]> = {
+      'cautious': [
+        `I'm not really in a position to answer that - ${suggestedPersona || 'someone else'} would have better information.`,
+        `That's outside my area of knowledge. You might want to ask ${suggestedPersona || 'an administrator'} about that.`
+      ],
+      'enthusiastic': [
+        `Oh, great question! But that's not something I'd know - ${suggestedPersona || 'another team member'} would be perfect to ask!`,
+        `I wish I could help with that! ${suggestedPersona || 'Someone else'} would definitely have those details.`
+      ],
+      'practical': [
+        `That's not within my scope of knowledge. ${suggestedPersona || 'The appropriate person'} would have that information.`,
+        `I handle ${persona.role.toLowerCase()} matters, but for that you'd need to check with ${suggestedPersona || 'someone else'}.`
+      ],
+      'analytical': [
+        `Based on my role, I don't have access to that data. ${suggestedPersona || 'The relevant stakeholder'} would be the right source.`,
+        `That falls outside my analytical domain. I'd recommend consulting ${suggestedPersona || 'the appropriate party'}.`
+      ]
+    }
+
+    const defaultDeflections = [
+      `I wouldn't have that information as a ${persona.role}, but ${suggestedPersona || 'someone else'} might be able to help.`,
+      `That's outside my area as a ${persona.role}. You'd need to ask ${suggestedPersona || 'the appropriate person'}.`
+    ]
+
+    const personalityKey = persona.personality.toLowerCase()
+    const deflections = personalityDeflections[personalityKey] || defaultDeflections
+
+    return deflections[Math.floor(Math.random() * deflections.length)]
+  }
+
+  // NEW: Generate collaborative deflection that still contributes to discussion
+  private generateCollaborativeDeflection(
+    persona: Persona,
+    question: string,
+    suggestedPersona: string | undefined,
+    priorReplies: string,
+    isFirstSpeaker: boolean
+  ): string {
+    const collaborativeDeflections: Record<string, string[]> = {
+      'cautious': [
+        `That specific detail is outside my expertise as a ${persona.role}, but I can share that ${this.getRelevantContribution(persona)}. Perhaps ${suggestedPersona || 'someone else'} can provide those specifics?`,
+        `I don't have access to that information, but from my ${persona.role} perspective, ${this.getRelevantContribution(persona)}. ${suggestedPersona || 'Another team member'} would know the details.`
+      ],
+      'enthusiastic': [
+        `Great point! While I can't speak to those specifics, I'm excited to share that ${this.getRelevantContribution(persona)}! Maybe ${suggestedPersona || 'a teammate'} has those details?`,
+        `Love this discussion! From my ${persona.role} angle, ${this.getRelevantContribution(persona)}. ${suggestedPersona || 'Someone else'} would have the info you're looking for!`
+      ],
+      'practical': [
+        `I'll focus on what I know as a ${persona.role}: ${this.getRelevantContribution(persona)}. For those specific details, ${suggestedPersona || 'the appropriate team member'} would be the expert.`,
+        `From a practical ${persona.role} standpoint, ${this.getRelevantContribution(persona)}. ${suggestedPersona || 'Another colleague'} handles those specifics.`
+      ],
+      'analytical': [
+        `Analyzing from my ${persona.role} perspective: ${this.getRelevantContribution(persona)}. The data you're asking about would come from ${suggestedPersona || 'another department'}.`,
+        `Based on my domain expertise, ${this.getRelevantContribution(persona)}. For those metrics, consult ${suggestedPersona || 'the relevant stakeholder'}.`
+      ]
+    }
+
+    const defaultDeflections = [
+      `As a ${persona.role}, I can contribute that ${this.getRelevantContribution(persona)}. ${suggestedPersona || 'Another team member'} would have the specifics you're asking about.`,
+      `From my ${persona.role} perspective, ${this.getRelevantContribution(persona)}. You'll need ${suggestedPersona || 'someone else'} for those particular details.`
+    ]
+
+    const personalityKey = persona.personality.toLowerCase()
+    const deflections = collaborativeDeflections[personalityKey] || defaultDeflections
+
+    // Add collaborative elements if not first speaker
+    let deflection = deflections[Math.floor(Math.random() * deflections.length)]
+
+    if (!isFirstSpeaker && priorReplies) {
+      const collaborativeAddons = [
+        ` Building on what was said earlier,`,
+        ` Adding to the discussion,`,
+        ` To complement what my colleagues shared,`
+      ]
+      deflection = collaborativeAddons[Math.floor(Math.random() * collaborativeAddons.length)] + deflection
+    }
+
+    return deflection
+  }
+
+  // NEW: Get relevant contribution based on role
+  private getRelevantContribution(persona: Persona): string {
+    const roleContributions: Record<string, string[]> = {
+      'Student': [
+        'we need this to be user-friendly and accessible',
+        'this would really help with our collaboration and project work',
+        'ease of use is crucial for student adoption'
+      ],
+      'Instructor': [
+        'this needs to support effective evaluation and feedback',
+        'the pedagogical implications are important to consider',
+        'this should enhance the learning experience'
+      ],
+      'Administrator': [
+        'we need to ensure scalability and security',
+        'the system architecture must support this requirement',
+        'compliance and data integrity are key considerations'
+      ],
+      'Project Manager': [
+        'we need to consider the timeline and resource implications',
+        'this affects our project milestones and deliverables',
+        'risk mitigation strategies should be in place'
+      ],
+      'IT Support': [
+        'users will need proper training and documentation',
+        'we should consider the support implications',
+        'this feature needs to be intuitive to reduce support tickets'
+      ]
+    }
+
+    const contributions = roleContributions[persona.role] || [
+      'this impacts our workflow',
+      'we should consider the practical implications',
+      'user experience is important here'
+    ]
+
+    return contributions[Math.floor(Math.random() * contributions.length)]
   }
 
   // NEW NODE: Collaboration summary to consolidate team decisions
@@ -318,99 +565,100 @@ Format as a brief team summary (2-3 sentences):`
     }
   }
 
-private async collaborativeDiscussionNode(state: AgentState): Promise<NodeResult> {
-  console.log('🤝 Starting collaborative discussion between personas:', state.engagedPersonas.map(p => p.name))
+  private async collaborativeDiscussionNode(state: AgentState): Promise<NodeResult> {
+    console.log('🤝 Starting collaborative discussion between personas:', state.engagedPersonas.map(p => p.name))
 
-  const responses: PersonaResponse[] = []
-  const latestMessage = state.messages[state.messages.length - 1]
+    const responses: PersonaResponse[] = []
+    const latestMessage = state.messages[state.messages.length - 1]
 
-  // Extract collaboration goal from analysis result or derive from message
-  const collaborationGoal = state.analysisResult?.collaborationGoal ||
-    this.extractCollaborationGoal(latestMessage.content)
+    // Extract collaboration goal from analysis result or derive from message
+    const collaborationGoal = state.analysisResult?.collaborationGoal ||
+      this.extractCollaborationGoal(latestMessage.content)
 
-  // Build consensus items from previous collaborative messages or existing team goals
-  const consensusItems: string[] = []
-  if (state.collaborativeGoals[collaborationGoal]) {
-    consensusItems.push(...state.collaborativeGoals[collaborationGoal])
-  }
+    // Build consensus items from previous collaborative messages or existing team goals
+    const consensusItems: string[] = []
+    if (state.collaborativeGoals[collaborationGoal]) {
+      consensusItems.push(...state.collaborativeGoals[collaborationGoal])
+    }
 
-  // Check if we should encourage challenging (vary the discussion dynamics)
-  const collaborativeTurns = state.messages.filter(msg =>
-    msg.metadata?.discussionRound === true
-  ).length
-  const shouldChallenge = collaborativeTurns > 0 && Math.random() > 0.6 // 40% chance to challenge after first turn
+    // Check if we should encourage challenging (vary the discussion dynamics)
+    const collaborativeTurns = state.messages.filter(msg =>
+      msg.metadata?.discussionRound === true
+    ).length
+    const shouldChallenge = collaborativeTurns > 0 && Math.random() > 0.6 // 40% chance to challenge after first turn
 
-  // Generate responses sequentially so each persona can build on previous ones
-  for (let i = 0; i < state.engagedPersonas.length; i++) {
-    const persona = state.engagedPersonas[i]
+    // Generate responses sequentially so each persona can build on previous ones
+    for (let i = 0; i < state.engagedPersonas.length; i++) {
+      const persona = state.engagedPersonas[i]
 
-    try {
-      // Build context of prior replies in this discussion round
-      const priorReplies = responses.slice(0, i).map(r => `${r.personaName}: ${r.content}`).join('\n')
+      try {
+        // Build context of prior replies in this discussion round
+        const priorReplies = responses.slice(0, i).map(r => `${r.personaName}: ${r.content}`).join('\n')
 
-      const response = await this.generateCollaborativeResponse(
-        persona,
-        latestMessage,
-        state,
-        priorReplies,
-        i === 0, // isFirstSpeaker
-        collaborationGoal,
-        consensusItems,
-        shouldChallenge && i > 0 // Only non-first speakers can challenge
-      )
-      responses.push(response)
+        const response = await this.generateCollaborativeResponse(
+          persona,
+          latestMessage,
+          state,
+          priorReplies,
+          i === 0, // isFirstSpeaker
+          collaborationGoal,
+          consensusItems,
+          shouldChallenge && i > 0 // Only non-first speakers can challenge
+        )
+        responses.push(response)
 
-      console.log(`✅ Generated collaborative response from ${persona.name} (${i + 1}/${state.engagedPersonas.length})`)
+        console.log(`✅ Generated collaborative response from ${persona.name} (${i + 1}/${state.engagedPersonas.length})`)
 
-    } catch (error) {
-      console.error(`Failed to generate collaborative response for ${persona.name}:`, error)
-      responses.push({
-        personaName: persona.name,
-        content: this.getFallbackResponse(persona, latestMessage.content),
-        agentId: persona.name,
-        confidence: 0.3,
-        reasoning: 'Fallback due to generation error in collaboration'
-      })
+      } catch (error) {
+        console.error(`Failed to generate collaborative response for ${persona.name}:`, error)
+        responses.push({
+          personaName: persona.name,
+          content: this.getFallbackResponse(persona, latestMessage.content),
+          agentId: persona.name,
+          confidence: 0.3,
+          reasoning: 'Fallback due to generation error in collaboration'
+        })
+      }
+    }
+
+    // Add responses to state as new messages
+    const newMessages = responses.map((resp, index) => ({
+      id: `${Date.now()}-${resp.personaName}-${index}`,
+      sender: 'persona' as const,
+      personaName: resp.personaName,
+      content: resp.content,
+      timestamp: new Date(),
+      metadata: {
+        confidence: resp.confidence,
+        reasoning: resp.reasoning,
+        discussionRound: true,
+        speakingOrder: index + 1,
+        collaborationGoal: collaborationGoal
+      }
+    }))
+
+    // Update engagement tracking
+    const newlyEngaged = responses.map(r => r.personaName)
+    const updatedPreviouslyEngaged = [
+      ...state.previouslyEngagedPersonas,
+      ...newlyEngaged
+    ].slice(-8)
+
+    return {
+      nextNode: 'validate_responses',
+      shouldContinue: true,
+      responses,
+      updatedState: {
+        ...state,
+        messages: [...state.messages, ...newMessages],
+        currentSpeaker: responses.length === 1 ? responses[0].personaName : null,
+        turnCount: state.turnCount + 1,
+        previouslyEngagedPersonas: updatedPreviouslyEngaged,
+        lastAction: 'collaborative_discussion_complete'
+      }
     }
   }
 
-  // Add responses to state as new messages
-  const newMessages = responses.map((resp, index) => ({
-    id: `${Date.now()}-${resp.personaName}-${index}`,
-    sender: 'persona' as const,
-    personaName: resp.personaName,
-    content: resp.content,
-    timestamp: new Date(),
-    metadata: {
-      confidence: resp.confidence,
-      reasoning: resp.reasoning,
-      discussionRound: true,
-      speakingOrder: index + 1,
-      collaborationGoal: collaborationGoal
-    }
-  }))
-
-  // Update engagement tracking
-  const newlyEngaged = responses.map(r => r.personaName)
-  const updatedPreviouslyEngaged = [
-    ...state.previouslyEngagedPersonas,
-    ...newlyEngaged
-  ].slice(-8)
-
-  return {
-    nextNode: 'validate_responses',
-    shouldContinue: true,
-    responses,
-    updatedState: {
-      ...state,
-      messages: [...state.messages, ...newMessages],
-      currentSpeaker: responses.length === 1 ? responses[0].personaName : null,
-      turnCount: state.turnCount + 1,
-      previouslyEngagedPersonas: updatedPreviouslyEngaged,
-      lastAction: 'collaborative_discussion_complete'
-    }
-  }
-}
   // New node: Context summarization for memory management
   private async summarizeContextNode(state: AgentState): Promise<NodeResult> {
     console.log('📝 Summarizing conversation context for memory management')
@@ -628,72 +876,107 @@ Question: "${latestMessage.content}"`
 
   // Enhanced routing with full instructor configuration integration
   // FIXED VERSION: Enhanced routing with proper single-persona handling
-private async routeToPersonasNode(state: AgentState): Promise<NodeResult> {
-  console.log('🎯 Routing personas based on analysis and instructor config:', state.analysisResult)
+  private async routeToPersonasNode(state: AgentState): Promise<NodeResult> {
+    console.log('🎯 Routing personas based on analysis and instructor config:', state.analysisResult)
 
-  const analysis = state.analysisResult
-  const config = state.instructorConfig
-  let selectedPersonas: Persona[] = []
+    const analysis = state.analysisResult
+    const config = state.instructorConfig
+    let selectedPersonas: Persona[] = []
 
-  // INSTRUCTOR OVERRIDE: Require all personas mode
-  if (config.requireAllPersonas) {
-    selectedPersonas = [...state.registeredPersonas]
-    console.log('🎓 Instructor config: ALL personas must respond')
-  } else if (!analysis) {
-    selectedPersonas = [state.registeredPersonas[state.turnCount % state.registeredPersonas.length]]
-  } else {
-    switch (analysis.intent) {
-      case "targeted":
-        selectedPersonas = state.registeredPersonas.filter(p =>
-          analysis.targetPersonas.includes(p.name)
-        )
-        console.log(`✅ Targeted selection: ${selectedPersonas.map(p => p.name).join(', ')}`)
-        break
+    // INSTRUCTOR OVERRIDE: Require all personas mode
+    if (config.requireAllPersonas) {
+      selectedPersonas = [...state.registeredPersonas]
+      console.log('🎓 Instructor config: ALL personas must respond')
+    } else if (!analysis) {
+      selectedPersonas = [state.registeredPersonas[state.turnCount % state.registeredPersonas.length]]
+    } else {
+      switch (analysis.intent) {
+        case "targeted":
+          selectedPersonas = state.registeredPersonas.filter(p =>
+            analysis.targetPersonas.includes(p.name)
+          )
+          console.log(`✅ Targeted selection: ${selectedPersonas.map(p => p.name).join(', ')}`)
+          break
 
-      case "follow_up":
-        if (state.currentSpeaker) {
-          const currentPersona = state.registeredPersonas.find(p => p.name === state.currentSpeaker)
-          if (currentPersona) {
-            selectedPersonas = [currentPersona]
-            console.log(`✅ Follow-up locked to current speaker: ${state.currentSpeaker}`)
+        case "follow_up":
+          if (state.currentSpeaker) {
+            const currentPersona = state.registeredPersonas.find(p => p.name === state.currentSpeaker)
+            if (currentPersona) {
+              selectedPersonas = [currentPersona]
+              console.log(`✅ Follow-up locked to current speaker: ${state.currentSpeaker}`)
 
-            const others = state.registeredPersonas.filter(p =>
-              p.name !== state.currentSpeaker &&
-              !state.previouslyEngagedPersonas.slice(-1).includes(p.name)
-            )
-            if (others.length > 0 && Math.random() > 0.6) {
-              selectedPersonas.push(others[0])
-              console.log(`✅ Added secondary speaker: ${others[0].name}`)
+              const others = state.registeredPersonas.filter(p =>
+                p.name !== state.currentSpeaker &&
+                !state.previouslyEngagedPersonas.slice(-1).includes(p.name)
+              )
+              if (others.length > 0 && Math.random() > 0.6) {
+                selectedPersonas.push(others[0])
+                console.log(`✅ Added secondary speaker: ${others[0].name}`)
+              }
             }
           }
+          break
+
+        case "general":
+          selectedPersonas = this.selectForGeneralQuestion(state, analysis)
+          console.log(`✅ General question selection: ${selectedPersonas.map(p => p.name).join(', ')}`)
+          break
+      }
+    }
+
+    // INSTRUCTOR OVERRIDE: Forced persona order
+    if (config.forcedPersonaOrder && config.forcedPersonaOrder.length > 0) {
+      const orderedPersonas = config.forcedPersonaOrder
+        .map(name => state.registeredPersonas.find(p => p.name === name))
+        .filter((p): p is Persona => p !== undefined)
+
+      if (orderedPersonas.length > 0) {
+        const currentIndex = state.turnCount % orderedPersonas.length
+        selectedPersonas = [orderedPersonas[currentIndex]]
+        console.log(`🎓 Instructor forced order: ${selectedPersonas[0].name} (position ${currentIndex})`)
+      }
+    }
+
+    // BUG FIX: Handle single persona case differently
+    if (state.registeredPersonas.length === 1) {
+      // For single persona, always select that persona but clear current speaker to allow response
+      selectedPersonas = [state.registeredPersonas[0]]
+      console.log('🔧 Single persona mode: allowing response from only available persona')
+
+      // Update turn history
+      const updatedTurnHistory = { ...state.personaTurnHistory }
+      selectedPersonas.forEach(persona => {
+        updatedTurnHistory[persona.name] = (updatedTurnHistory[persona.name] || 0) + 1
+      })
+
+      return {
+        nextNode: 'generate_responses',
+        shouldContinue: true,
+        updatedState: {
+          ...state,
+          engagedPersonas: selectedPersonas,
+          personaTurnHistory: updatedTurnHistory,
+          currentSpeaker: null, // CRITICAL: Clear current speaker to allow response generation
+          lastAction: `routed_to_single_persona_${selectedPersonas[0].name}`
         }
-        break
-
-      case "general":
-        selectedPersonas = this.selectForGeneralQuestion(state, analysis)
-        console.log(`✅ General question selection: ${selectedPersonas.map(p => p.name).join(', ')}`)
-        break
+      }
     }
-  }
 
-  // INSTRUCTOR OVERRIDE: Forced persona order
-  if (config.forcedPersonaOrder && config.forcedPersonaOrder.length > 0) {
-    const orderedPersonas = config.forcedPersonaOrder
-      .map(name => state.registeredPersonas.find(p => p.name === name))
-      .filter((p): p is Persona => p !== undefined)
+    // MULTI-PERSONA FIX: Prevent same persona from speaking multiple times in same turn
+    selectedPersonas = selectedPersonas.filter(p => p.name !== state.currentSpeaker)
 
-    if (orderedPersonas.length > 0) {
-      const currentIndex = state.turnCount % orderedPersonas.length
-      selectedPersonas = [orderedPersonas[currentIndex]]
-      console.log(`🎓 Instructor forced order: ${selectedPersonas[0].name} (position ${currentIndex})`)
+    // If we filtered out everyone in multi-persona scenario, add back one persona (but not the current speaker)
+    if (selectedPersonas.length === 0) {
+      const availablePersonas = state.registeredPersonas.filter(p => p.name !== state.currentSpeaker)
+      if (availablePersonas.length > 0) {
+        selectedPersonas = [availablePersonas[0]]
+        console.log(`⚠️ Fallback selection applied (avoiding current speaker: ${state.currentSpeaker})`)
+      } else {
+        // This should not happen in multi-persona scenario, but handle gracefully
+        selectedPersonas = [state.registeredPersonas[0]]
+        console.log('⚠️ Edge case fallback: using first available persona')
+      }
     }
-  }
-
-  // BUG FIX: Handle single persona case differently
-  if (state.registeredPersonas.length === 1) {
-    // For single persona, always select that persona but clear current speaker to allow response
-    selectedPersonas = [state.registeredPersonas[0]]
-    console.log('🔧 Single persona mode: allowing response from only available persona')
 
     // Update turn history
     const updatedTurnHistory = { ...state.personaTurnHistory }
@@ -708,45 +991,10 @@ private async routeToPersonasNode(state: AgentState): Promise<NodeResult> {
         ...state,
         engagedPersonas: selectedPersonas,
         personaTurnHistory: updatedTurnHistory,
-        currentSpeaker: null, // CRITICAL: Clear current speaker to allow response generation
-        lastAction: `routed_to_single_persona_${selectedPersonas[0].name}`
+        lastAction: `routed_to_${selectedPersonas.length}_personas`
       }
     }
   }
-
-  // MULTI-PERSONA FIX: Prevent same persona from speaking multiple times in same turn
-  selectedPersonas = selectedPersonas.filter(p => p.name !== state.currentSpeaker)
-
-  // If we filtered out everyone in multi-persona scenario, add back one persona (but not the current speaker)
-  if (selectedPersonas.length === 0) {
-    const availablePersonas = state.registeredPersonas.filter(p => p.name !== state.currentSpeaker)
-    if (availablePersonas.length > 0) {
-      selectedPersonas = [availablePersonas[0]]
-      console.log(`⚠️ Fallback selection applied (avoiding current speaker: ${state.currentSpeaker})`)
-    } else {
-      // This should not happen in multi-persona scenario, but handle gracefully
-      selectedPersonas = [state.registeredPersonas[0]]
-      console.log('⚠️ Edge case fallback: using first available persona')
-    }
-  }
-
-  // Update turn history
-  const updatedTurnHistory = { ...state.personaTurnHistory }
-  selectedPersonas.forEach(persona => {
-    updatedTurnHistory[persona.name] = (updatedTurnHistory[persona.name] || 0) + 1
-  })
-
-  return {
-    nextNode: 'generate_responses',
-    shouldContinue: true,
-    updatedState: {
-      ...state,
-      engagedPersonas: selectedPersonas,
-      personaTurnHistory: updatedTurnHistory,
-      lastAction: `routed_to_${selectedPersonas.length}_personas`
-    }
-  }
-}
 
   private selectForGeneralQuestion(state: AgentState, analysis: any): Persona[] {
     const config = state.instructorConfig
@@ -840,27 +1088,34 @@ private async routeToPersonasNode(state: AgentState): Promise<NodeResult> {
     const consensusContext = consensusItems.length > 0 ?
       `\nEMERGING TEAM CONSENSUS: ${consensusItems.join(', ')}` : ''
 
+    // NEW: Role-specific knowledge boundaries for collaboration
+    const roleKnowledgeBoundaries = this.getRoleKnowledgeBoundaries(persona.role)
+    const roleValidationKeywords = this.getRoleValidationKeywords(persona.role)
+
     // ENHANCED: Collaborative-specific instructions with clear shared goal
     const sharedGoalInstruction = `SHARED TEAM GOAL: The team must produce a unified ${collaborationGoal.replace('_', ' ')} recommendation.`
 
     const collaborationInstruction = isFirstSpeaker ?
       `- You are starting a team discussion to achieve: ${collaborationGoal.replace('_', ' ')}
-- Present your initial perspective clearly and specifically
+- Present your initial perspective clearly and specifically FROM YOUR ROLE'S VIEWPOINT
 - Set up the foundation for your teammates to build upon
-- Be specific about your role's unique viewpoint and recommendations` :
+- Be specific about your role's unique viewpoint and recommendations
+- ONLY share information that someone in your role would know` :
 
       shouldChallenge ?
       `- Your teammates have shared their thoughts (see below)
-- You may respectfully challenge or offer alternatives to their suggestions
-- Provide constructive criticism and propose better solutions
+- You may respectfully challenge or offer alternatives to their suggestions FROM YOUR ROLE'S PERSPECTIVE
+- Provide constructive criticism and propose better solutions based on your role's expertise
 - Reference what others said specifically (e.g., "I disagree with [Name] about X because...")
-- Work toward a better collaborative solution` :
+- Work toward a better collaborative solution
+- ONLY contribute knowledge from your role's domain` :
 
       `- Your teammates have already shared their thoughts (see below)
-- Build on their ideas - don't just repeat what they said
+- Build on their ideas FROM YOUR ROLE'S UNIQUE PERSPECTIVE
 - Add your unique perspective, clarify points, or extend their suggestions
 - Reference what others said when relevant (e.g., "Building on [Name]'s point about...")
-- Help the team reach consensus on ${collaborationGoal.replace('_', ' ')}`
+- Help the team reach consensus on ${collaborationGoal.replace('_', ' ')}
+- ONLY share information appropriate to your role`
 
     // Personality and length instructions
     const personalityInstruction = config.personalityEmphasis ?
@@ -880,6 +1135,13 @@ GOAL: ${persona.goal}
 CONCERNS: ${persona.concerns}
 PERSONALITY: ${persona.personality}
 
+CRITICAL ROLE BOUNDARIES IN COLLABORATION:
+You can ONLY contribute information someone in your role would realistically know:
+${roleKnowledgeBoundaries}
+
+If teammates ask about something outside your expertise, say:
+"That's outside my area, but [suggest appropriate team member] would know better."
+
 ${sharedGoalInstruction}
 CONTEXT: ${state.conversationContext}
 STUDENT'S QUESTION: ${studentMessage.content}
@@ -897,6 +1159,8 @@ CRITICAL RULES:
 - Stay completely in character as ${persona.name}
 - NEVER mention you are an AI, language model, or chatbot
 - This is a real team discussion - interact naturally with your colleagues
+- ONLY contribute knowledge appropriate to your ${persona.role} role
+- Acknowledge when something is outside your expertise
 - The team must reach a specific conclusion about ${collaborationGoal.replace('_', ' ')}
 - Feel free to ask questions, challenge ideas constructively, or build consensus
 - Only claim to have "discussed with colleagues" if teammates actually spoke before you
@@ -904,6 +1168,11 @@ CRITICAL RULES:
 
 CONVERSATION HISTORY:
 ${historyText}
+
+Before responding, verify:
+1. Am I only sharing information a ${persona.role} would know?
+2. Am I staying within my role boundaries?
+3. Am I contributing my role's unique perspective to the team discussion?
 
 Respond as ${persona.name} in this collaborative team discussion, working toward the shared goal:`
 
@@ -920,6 +1189,30 @@ Respond as ${persona.name} in this collaborative team discussion, working toward
     })
 
     let content = response.text?.trim() || this.getFallbackResponse(persona, studentMessage.content)
+
+    // Filter unnecessary content
+    content = this.filterUnnecessaryContent(content)
+
+    // NEW: Validate collaborative response doesn't contain out-of-role information
+    const validationResult = this.validateRoleAppropriateResponse(
+      content,
+      persona.role,
+      roleValidationKeywords,
+      studentMessage.content
+    )
+
+    if (!validationResult.isValid) {
+      console.log(`⚠️ Role violation in collaboration for ${persona.name}: ${validationResult.reason}`)
+      // Generate a collaborative deflection that still contributes
+      content = this.generateCollaborativeDeflection(
+        persona,
+        studentMessage.content,
+        validationResult.suggestedPersona,
+        priorReplies,
+        isFirstSpeaker
+      )
+      baseConfidence *= 0.85 // Slight reduction for deflection in collaboration
+    }
 
     // Enforce max length if specified
     if (config.maxResponseLength && content.length > config.maxResponseLength) {
@@ -968,89 +1261,88 @@ Respond as ${persona.name} in this collaborative team discussion, working toward
     }
   }
 
-  // Enhanced response generation with instructor configuration
   // Enhanced response generation with instructor configuration (for non-collaborative responses)
-private async generateResponsesNode(state: AgentState): Promise<NodeResult> {
-  console.log('💬 Generating individual responses from personas:', state.engagedPersonas.map(p => p.name))
+  private async generateResponsesNode(state: AgentState): Promise<NodeResult> {
+    console.log('💬 Generating individual responses from personas:', state.engagedPersonas.map(p => p.name))
 
-  const responses: PersonaResponse[] = []
-  const latestMessage = state.messages[state.messages.length - 1]
+    const responses: PersonaResponse[] = []
+    const latestMessage = state.messages[state.messages.length - 1]
 
-  // CRITICAL FIX: Different logic for single vs multi-persona scenarios
-  let eligiblePersonas: Persona[]
+    // CRITICAL FIX: Different logic for single vs multi-persona scenarios
+    let eligiblePersonas: Persona[]
 
-  if (state.registeredPersonas.length === 1) {
-    // Single persona: always allow the only persona to respond
-    eligiblePersonas = state.engagedPersonas
-    console.log('🔧 Single persona mode: allowing only available persona to respond')
-  } else {
-    // Multi-persona: filter out current speaker to prevent multiple replies in same turn
-    eligiblePersonas = state.engagedPersonas.filter(persona => {
-      if (persona.name === state.currentSpeaker) {
-        console.log(`🚫 Skipping ${persona.name} - already current speaker`)
-        return false
-      }
-      return true
-    })
-  }
-
-  for (const persona of eligiblePersonas) {
-    try {
-      const response = await this.generatePersonaResponse(persona, latestMessage, state)
-      responses.push(response)
-    } catch (error) {
-      console.error(`Failed to generate response for ${persona.name}:`, error)
-      responses.push({
-        personaName: persona.name,
-        content: this.getFallbackResponse(persona, latestMessage.content),
-        agentId: persona.name,
-        confidence: 0.3,
-        reasoning: 'Fallback due to generation error'
+    if (state.registeredPersonas.length === 1) {
+      // Single persona: always allow the only persona to respond
+      eligiblePersonas = state.engagedPersonas
+      console.log('🔧 Single persona mode: allowing only available persona to respond')
+    } else {
+      // Multi-persona: filter out current speaker to prevent multiple replies in same turn
+      eligiblePersonas = state.engagedPersonas.filter(persona => {
+        if (persona.name === state.currentSpeaker) {
+          console.log(`🚫 Skipping ${persona.name} - already current speaker`)
+          return false
+        }
+        return true
       })
     }
-  }
 
-  // If no responses generated in multi-persona scenario, get one different persona
-  if (responses.length === 0 && state.registeredPersonas.length > 1) {
-    const alternativePersona = state.registeredPersonas.find(p => p.name !== state.currentSpeaker)
-    if (alternativePersona) {
-      console.log(`⚠️ No eligible personas, using alternative: ${alternativePersona.name}`)
-      const response = await this.generatePersonaResponse(alternativePersona, latestMessage, state)
-      responses.push(response)
+    for (const persona of eligiblePersonas) {
+      try {
+        const response = await this.generatePersonaResponse(persona, latestMessage, state)
+        responses.push(response)
+      } catch (error) {
+        console.error(`Failed to generate response for ${persona.name}:`, error)
+        responses.push({
+          personaName: persona.name,
+          content: this.getFallbackResponse(persona, latestMessage.content),
+          agentId: persona.name,
+          confidence: 0.3,
+          reasoning: 'Fallback due to generation error'
+        })
+      }
+    }
+
+    // If no responses generated in multi-persona scenario, get one different persona
+    if (responses.length === 0 && state.registeredPersonas.length > 1) {
+      const alternativePersona = state.registeredPersonas.find(p => p.name !== state.currentSpeaker)
+      if (alternativePersona) {
+        console.log(`⚠️ No eligible personas, using alternative: ${alternativePersona.name}`)
+        const response = await this.generatePersonaResponse(alternativePersona, latestMessage, state)
+        responses.push(response)
+      }
+    }
+
+    // Add responses to state as new messages
+    const newMessages = responses.map(resp => ({
+      id: `${Date.now()}-${resp.personaName}`,
+      sender: 'persona' as const,
+      personaName: resp.personaName,
+      content: resp.content,
+      timestamp: new Date(),
+      metadata: { confidence: resp.confidence, reasoning: resp.reasoning }
+    }))
+
+    // Update engagement tracking
+    const newlyEngaged = responses.map(r => r.personaName)
+    const updatedPreviouslyEngaged = [
+      ...state.previouslyEngagedPersonas,
+      ...newlyEngaged
+    ].slice(-8)
+
+    return {
+      nextNode: 'validate_responses',
+      shouldContinue: true,
+      responses,
+      updatedState: {
+        ...state,
+        messages: [...state.messages, ...newMessages],
+        currentSpeaker: responses.length === 1 ? responses[0].personaName : null,
+        turnCount: state.turnCount + 1,
+        previouslyEngagedPersonas: updatedPreviouslyEngaged,
+        lastAction: 'responses_generated'
+      }
     }
   }
-
-  // Add responses to state as new messages
-  const newMessages = responses.map(resp => ({
-    id: `${Date.now()}-${resp.personaName}`,
-    sender: 'persona' as const,
-    personaName: resp.personaName,
-    content: resp.content,
-    timestamp: new Date(),
-    metadata: { confidence: resp.confidence, reasoning: resp.reasoning }
-  }))
-
-  // Update engagement tracking
-  const newlyEngaged = responses.map(r => r.personaName)
-  const updatedPreviouslyEngaged = [
-    ...state.previouslyEngagedPersonas,
-    ...newlyEngaged
-  ].slice(-8)
-
-  return {
-    nextNode: 'validate_responses',
-    shouldContinue: true,
-    responses,
-    updatedState: {
-      ...state,
-      messages: [...state.messages, ...newMessages],
-      currentSpeaker: responses.length === 1 ? responses[0].personaName : null,
-      turnCount: state.turnCount + 1,
-      previouslyEngagedPersonas: updatedPreviouslyEngaged,
-      lastAction: 'responses_generated'
-    }
-  }
-}
 
   // Enhanced validation with stricter confidence checks
   private async validateResponsesNode(state: AgentState): Promise<NodeResult> {
@@ -1172,12 +1464,26 @@ private async generateResponsesNode(state: AgentState): Promise<NodeResult> {
 - Be concise while maintaining your personality and role authenticity` :
       `- Keep responses 2-4 sentences for natural conversation flow`
 
+    // NEW: Role-specific knowledge boundaries
+    const roleKnowledgeBoundaries = this.getRoleKnowledgeBoundaries(persona.role)
+    const roleValidationKeywords = this.getRoleValidationKeywords(persona.role)
+
     const prompt = `You are ${persona.name}, a ${persona.role}. Here are your characteristics:
 
 ROLE: ${persona.role}
 GOAL: ${persona.goal}
 CONCERNS: ${persona.concerns}
 PERSONALITY: ${persona.personality}
+
+CRITICAL ROLE BOUNDARIES:
+You can ONLY speak about things someone in your role would realistically know:
+${roleKnowledgeBoundaries}
+
+If asked about something outside your role's knowledge, you MUST respond with:
+"I wouldn't have that information, but [suggest appropriate persona] might be able to help with that."
+
+Examples of what you CANNOT answer:
+${this.getRoleInappropriateExamples(persona.role)}
 
 CONTEXT: ${state.conversationContext}
 CONVERSATION THEMES: ${state.conversationSummary}
@@ -1186,6 +1492,7 @@ CRITICAL INSTRUCTIONS:
 - Stay completely in character as ${persona.name}
 - NEVER mention you are an AI, language model, or chatbot
 - Speak as if you are a real person in this role
+- STRICTLY adhere to your role boundaries - only share information your role would realistically have
 ${personalityInstruction}
 - Draw from your specific goals, concerns, and personality when responding
 - Be conversational and natural, showing your unique perspective
@@ -1198,7 +1505,12 @@ ${historyText}
 
 CURRENT QUESTION: ${studentMessage.content}
 
-Respond as ${persona.name} would, fully embodying your role and personality:`
+Before responding, ask yourself:
+1. Is this information something a ${persona.role} would realistically know?
+2. Am I staying within my role boundaries?
+3. Should I redirect to another persona who would know better?
+
+Respond as ${persona.name} would, fully embodying your role and personality while respecting role boundaries:`
 
     // INSTRUCTOR CONFIG: Adjust temperature for personality emphasis
     const temperature = config.personalityEmphasis ? 0.85 : 0.75
@@ -1213,6 +1525,29 @@ Respond as ${persona.name} would, fully embodying your role and personality:`
     })
 
     let content = response.text?.trim() || this.getFallbackResponse(persona, studentMessage.content)
+
+    // ADD THESE TWO LINES HERE:
+    // Filter unnecessary content
+    content = this.filterUnnecessaryContent(content)
+
+    // NEW: Validate response doesn't contain out-of-role information
+    const validationResult = this.validateRoleAppropriateResponse(
+      content,
+      persona.role,
+      roleValidationKeywords,
+      studentMessage.content
+    )
+
+    if (!validationResult.isValid) {
+      console.log(`⚠️ Role violation detected for ${persona.name}: ${validationResult.reason}`)
+      // Generate a role-appropriate deflection
+      content = this.generateRoleAppropriateDeflection(
+        persona,
+        studentMessage.content,
+        validationResult.suggestedPersona
+      )
+      baseConfidence *= 0.8 // Reduce confidence for deflection
+    }
 
     // INSTRUCTOR CONFIG: Enforce max length if specified
     if (config.maxResponseLength && content.length > config.maxResponseLength) {
