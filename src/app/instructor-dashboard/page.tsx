@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { Navigation } from '../components/Navigation'
 
 interface Persona {
  name: string
@@ -241,14 +242,11 @@ export default function InstructorDashboard() {
                {dashboardData.projectName} • {dashboardData.domain} Domain
              </p>
            </div>
-           <div className="flex gap-3">
-             <button
-               onClick={() => router.push('/personas')}
-               className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
-             >
-               ← Back to Personas
-             </button>
-           </div>
+           <Navigation
+             showHome={true}
+             showPersonas={true}
+             showInterview={true}
+           />
          </div>
        </div>
      </div>

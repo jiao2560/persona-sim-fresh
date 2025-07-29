@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { Navigation } from '../components/Navigation'
 
 interface Persona {
   name: string
@@ -498,12 +499,8 @@ export default function InterviewPage() {
                 Start Interview ({selectedPersonas.length} persona{selectedPersonas.length !== 1 ? 's' : ''})
               </button>
 
-              <button
-                onClick={() => router.push('/personas')}
-                className="w-full bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600"
-              >
-                ← Back to Personas
-              </button>
+              {/* Use Navigation component */}
+              <Navigation showHome={true} showPersonas={true} />
             </div>
           </div>
 

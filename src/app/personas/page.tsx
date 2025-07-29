@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { Navigation } from '../components/Navigation'
 
 interface Persona {
   name: string
@@ -29,6 +30,20 @@ interface PersonaData {
   }
 }
 
+interface DeletedRequirement {
+  req: string
+  index: number
+  timestamp: number
+}
+
+interface ArchivedSession {
+  id: string
+  personas: Persona[]
+  timestamp: Date
+  projectName: string
+  messageCount: number
+}
+
 export default function PersonasPage() {
   const [data, setData] = useState<PersonaData>({ personas: [] })
   const [originalRequest, setOriginalRequest] = useState<any>(null)
@@ -39,6 +54,16 @@ export default function PersonasPage() {
   const [showRegenerateModal, setShowRegenerateModal] = useState(false)
   const [customRequirements, setCustomRequirements] = useState<string[]>([])
   const [customRequirementInput, setCustomRequirementInput] = useState('')
+
+  // New state for delete confirmation and undo
+  const [deleteConfirm, setDeleteConfirm] = useState<{show: boolean, index: number}>({show: false, index: -1})
+  const [deletedRequirements, setDeletedRequirements] = useState<DeletedRequirement[]>([])
+  const [showUndoNotification, setShowUndoNotification] = useState(false)
+
+  // New state for archived sessions
+  const [showArchivesModal, setShowArchivesModal] = useState(false)
+  const [archivedSessions, setArchivedSessions] = useState<ArchivedSession[]>([])
+
   const router = useRouter()
 
   useEffect(() => {
@@ -46,7 +71,7 @@ export default function PersonasPage() {
     const raw = sessionStorage.getItem('personas')
     const requestRaw = sessionStorage.getItem('originalRequest')
 
-    if (!raw) return router.push('/') // no data → back to dashboard
+    if (!raw) return router.push('/') // no data → back to home
 
     try {
       const parsedData = JSON.parse(raw)
@@ -64,6 +89,17 @@ export default function PersonasPage() {
       if (requestRaw) {
         setOriginalRequest(JSON.parse(requestRaw))
       }
+
+      // Load archived sessions
+      const archives = sessionStorage.getItem('archived_sessions')
+      if (archives) {
+        try {
+          const parsedArchives = JSON.parse(archives)
+          setArchivedSessions(parsedArchives)
+        } catch (e) {
+          console.error('Error parsing archived sessions:', e)
+        }
+      }
     } catch (error) {
       console.error('Error parsing session data:', error)
       router.push('/')
@@ -73,6 +109,8 @@ export default function PersonasPage() {
   const handleStartEdit = () => {
     setIsEditingRequirements(true)
     setEditableRequirements(data.requirements || [])
+    // Clear deleted requirements when starting a new edit session
+    setDeletedRequirements([])
   }
 
   const handleSaveRequirements = () => {
@@ -83,12 +121,16 @@ export default function PersonasPage() {
     setData(updatedData)
     sessionStorage.setItem('personas', JSON.stringify(updatedData))
     setIsEditingRequirements(false)
+    // Clear deleted requirements after saving
+    setDeletedRequirements([])
   }
 
   const handleCancelEdit = () => {
     setIsEditingRequirements(false)
     setEditableRequirements(data.requirements || [])
     setNewRequirement('')
+    // Clear deleted requirements when canceling
+    setDeletedRequirements([])
   }
 
   const handleAddRequirement = () => {
@@ -99,7 +141,45 @@ export default function PersonasPage() {
   }
 
   const handleDeleteRequirement = (index: number) => {
+    setDeleteConfirm({show: true, index})
+  }
+
+  const handleConfirmDelete = () => {
+    const index = deleteConfirm.index
+    const deletedReq = editableRequirements[index]
+
+    // Store the deleted requirement with its original index
+    setDeletedRequirements([...deletedRequirements, {
+      req: deletedReq,
+      index: index,
+      timestamp: Date.now()
+    }])
+
+    // Remove the requirement
     setEditableRequirements(editableRequirements.filter((_, i) => i !== index))
+
+    // Close the confirmation dialog
+    setDeleteConfirm({show: false, index: -1})
+
+    // Show undo notification
+    setShowUndoNotification(true)
+    setTimeout(() => setShowUndoNotification(false), 5000)
+  }
+
+  const handleUndoDelete = () => {
+    if (deletedRequirements.length === 0) return
+
+    // Get the most recently deleted requirement
+    const lastDeleted = deletedRequirements[deletedRequirements.length - 1]
+
+    // Create a new array with the requirement inserted back at its original position
+    const newRequirements = [...editableRequirements]
+    newRequirements.splice(lastDeleted.index, 0, lastDeleted.req)
+
+    setEditableRequirements(newRequirements)
+
+    // Remove the last deleted requirement from the undo stack
+    setDeletedRequirements(deletedRequirements.slice(0, -1))
   }
 
   const handleUpdateRequirement = (index: number, value: string) => {
@@ -119,10 +199,79 @@ export default function PersonasPage() {
     setCustomRequirements(customRequirements.filter((_, i) => i !== index))
   }
 
+  const archiveCurrentSession = () => {
+    // Archive the current personas configuration regardless of interview status
+    const archivedSession: ArchivedSession = {
+      id: `archive-${Date.now()}`,
+      personas: data.personas,
+      timestamp: new Date(),
+      projectName: originalRequest?.projectName || 'Unknown Project',
+      messageCount: 0 // Will be updated if we find interview data
+    }
+
+    // Check multiple possible storage locations for interview data
+    const possibleKeys = ['currentSession', 'interview_session', 'interviewMessages']
+    let foundSession = false
+
+    for (const key of possibleKeys) {
+      const sessionData = sessionStorage.getItem(key)
+      if (sessionData) {
+        try {
+          const parsed = JSON.parse(sessionData)
+          if (parsed.messages && Array.isArray(parsed.messages)) {
+            archivedSession.messageCount = parsed.messages.length
+            // Store the full session data
+            sessionStorage.setItem(`archived_session_${archivedSession.id}`, JSON.stringify({
+              ...archivedSession,
+              messages: parsed.messages,
+              selectedPersonas: parsed.selectedPersonas || parsed.engagedPersonas || []
+            }))
+            foundSession = true
+            break
+          }
+        } catch (error) {
+          console.error(`Error parsing ${key}:`, error)
+        }
+      }
+    }
+
+    // If no interview data found, still archive the personas configuration
+    if (!foundSession) {
+      sessionStorage.setItem(`archived_session_${archivedSession.id}`, JSON.stringify({
+        ...archivedSession,
+        messages: [],
+        selectedPersonas: []
+      }))
+    }
+
+    // Update the archives list
+    const archives = [...archivedSessions, archivedSession]
+    setArchivedSessions(archives)
+    sessionStorage.setItem('archived_sessions', JSON.stringify(archives))
+
+    // Log for debugging
+    console.log('Archived session:', archivedSession)
+    console.log('Total archives:', archives.length)
+
+    return true
+  }
+
   const handleRegenerate = async () => {
     if (!originalRequest) {
       alert('Cannot regenerate - original request data not found')
       return
+    }
+
+    // Archive current session before regenerating
+    const wasArchived = archiveCurrentSession()
+    if (wasArchived) {
+      // Show different message based on whether interview data was found
+      const latestArchive = archivedSessions[archivedSessions.length - 1]
+      if (latestArchive && latestArchive.messageCount > 0) {
+        alert(`Interview session with ${latestArchive.messageCount} messages has been archived. You can access it from "View Previous Sessions".`)
+      } else {
+        alert('Current personas configuration has been archived. You can access it from "View Previous Sessions".')
+      }
     }
 
     setIsRegenerating(true)
@@ -163,6 +312,33 @@ export default function PersonasPage() {
     }
   }
 
+  const viewArchivedSession = (sessionId: string) => {
+    const archivedData = sessionStorage.getItem(`archived_session_${sessionId}`)
+    if (archivedData) {
+      try {
+        const session = JSON.parse(archivedData)
+        // Open interview page with archived data
+        sessionStorage.setItem('viewingArchived', JSON.stringify(session))
+        window.open('/interview?archived=true', '_blank')
+      } catch (error) {
+        console.error('Error loading archived session:', error)
+        alert('Failed to load archived session')
+      }
+    }
+  }
+
+  const deleteArchivedSession = (sessionId: string) => {
+    if (confirm('Are you sure you want to delete this archived session?')) {
+      // Remove from storage
+      sessionStorage.removeItem(`archived_session_${sessionId}`)
+
+      // Update archives list
+      const updatedArchives = archivedSessions.filter(s => s.id !== sessionId)
+      setArchivedSessions(updatedArchives)
+      sessionStorage.setItem('archived_sessions', JSON.stringify(updatedArchives))
+    }
+  }
+
   const { personas, projectOutline, requirements, references, metadata } = data
 
   return (
@@ -170,6 +346,12 @@ export default function PersonasPage() {
       <div className="flex justify-between items-start mb-6">
         <h1 className="text-3xl font-bold text-black">Generated Personas</h1>
         <div className="flex gap-3">
+          <button
+            onClick={() => setShowArchivesModal(true)}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2"
+          >
+            📚 View Previous Sessions ({archivedSessions.length})
+          </button>
           <button
             onClick={() => router.push('/instructor-dashboard')}
             className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 flex items-center gap-2"
@@ -198,12 +380,8 @@ export default function PersonasPage() {
               </>
             )}
           </button>
-          <button
-            onClick={() => router.push('/')}
-            className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
-          >
-            ← Back to Dashboard
-          </button>
+          {/* Use Navigation component */}
+          <Navigation showHome={true} />
         </div>
       </div>
 
@@ -300,6 +478,18 @@ export default function PersonasPage() {
                 Add
               </button>
             </div>
+
+            {/* Undo delete option */}
+            {deletedRequirements.length > 0 && (
+              <div className="flex items-center justify-end mt-3">
+                <button
+                  onClick={handleUndoDelete}
+                  className="text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1"
+                >
+                  ↩️ Undo last delete ({deletedRequirements.length})
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -367,11 +557,138 @@ export default function PersonasPage() {
         </div>
       )}
 
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm.show && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Confirm Delete</h3>
+            <p className="text-gray-700 mb-6">
+              Are you sure you want to delete this requirement? You can undo this action later.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteConfirm({show: false, index: -1})}
+                className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Undo Notification Toast */}
+      {showUndoNotification && (
+        <div className="fixed bottom-4 right-4 bg-gray-800 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50">
+          <span>Requirement deleted</span>
+          <button
+            onClick={handleUndoDelete}
+            className="text-blue-300 hover:text-blue-100 underline"
+          >
+            Undo
+          </button>
+        </div>
+      )}
+
+      {/* Archived Sessions Modal */}
+      {showArchivesModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">Previous Interview Sessions</h3>
+              <button
+                onClick={() => setShowArchivesModal(false)}
+                className="text-gray-400 hover:text-gray-500"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {archivedSessions.length === 0 ? (
+              <p className="text-gray-600 text-center py-8">
+                No archived sessions yet. Sessions are automatically archived when you regenerate personas.
+              </p>
+            ) : (
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {archivedSessions.map((session) => (
+                  <div key={session.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-gray-900">{session.projectName}</h4>
+                        <p className="text-sm text-gray-600 mt-1">
+                          Archived on {new Date(session.timestamp).toLocaleString()}
+                        </p>
+                        <p className="text-sm text-gray-500 mt-1">
+                          {session.messageCount > 0
+                            ? `${session.messageCount} messages • ${session.personas.length} personas`
+                            : `${session.personas.length} personas (no interview data)`
+                          }
+                        </p>
+                        <div className="flex gap-2 mt-2">
+                          {session.personas.slice(0, 3).map((persona, i) => (
+                            <span key={i} className="text-xs bg-gray-100 px-2 py-1 rounded">
+                              {persona.name}
+                            </span>
+                          ))}
+                          {session.personas.length > 3 && (
+                            <span className="text-xs text-gray-500">
+                              +{session.personas.length - 3} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-2 ml-4">
+                        <button
+                          onClick={() => viewArchivedSession(session.id)}
+                          className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => deleteArchivedSession(session.id)}
+                          className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setShowArchivesModal(false)}
+                className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Regenerate Modal */}
       {showRegenerateModal && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
             <h3 className="text-lg font-bold text-gray-900 mb-4">Regenerate Personas with Custom Requirements</h3>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+              <p className="text-sm text-amber-800">
+                ⚠️ <strong>Warning:</strong> Regenerating personas will archive any active interview session.
+                You can access archived sessions later from "View Previous Sessions".
+              </p>
+            </div>
 
             <p className="text-sm text-gray-600 mb-4">
               Optionally add custom requirements that should be included when regenerating personas:
