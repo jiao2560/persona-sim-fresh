@@ -177,7 +177,8 @@ persona-sim-fresh/
 - Generates feedback report
 ```
 
-> 📸 **Image needed**: Screenshot of coverage analysis report
+> <img width="1908" height="887" alt="image" src="https://github.com/user-attachments/assets/1aeeb160-6a62-4f8c-ae56-932e29a75405" />
+
 
 ---
 
@@ -328,7 +329,8 @@ npm run type-check  # Run TypeScript compiler
 - Configure rate limiting for API routes
 - Monitor Cohere API usage
 
-> 📸 **Image needed**: Vercel deployment settings screenshot
+> <img width="1898" height="894" alt="image" src="https://github.com/user-attachments/assets/a7e3b86d-1110-4a28-aba4-39d92895873f" />
+
 
 ---
 
@@ -395,4 +397,5 @@ MIT License - see [LICENSE](LICENSE) file
 *Questions? Issues? [Open an issue](https://github.com/jiao2560/persona-sim-fresh/issues)*
 
 </div>
+
 
