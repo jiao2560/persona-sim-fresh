@@ -57,7 +57,8 @@ A web application that generates AI-powered stakeholder personas from project de
 - Role-playing lacks consistency
 - Instructors need scalable teaching tools
 
-> 📸 **Image needed**: Screenshot showing a student interview session with multiple personas
+> <img width="1914" height="888" alt="image" src="https://github.com/user-attachments/assets/6ad10728-d37d-46b2-9452-2c5819171d39" />
+
 
 ---
 
@@ -78,7 +79,8 @@ A web application that generates AI-powered stakeholder personas from project de
 - **Dynamic Routing**: LangGraph orchestrates multi-agent conversations
 - **Quality Metrics**: Automated scoring of questions and coverage
 
-> 📸 **Image needed**: Screenshot of the instructor dashboard showing student progress metrics
+> <img width="1591" height="878" alt="image" src="https://github.com/user-attachments/assets/5c6ea8ee-26e6-4cc3-a5e9-567ba510a131" />
+
 
 ---
 
@@ -393,3 +395,4 @@ MIT License - see [LICENSE](LICENSE) file
 *Questions? Issues? [Open an issue](https://github.com/jiao2560/persona-sim-fresh/issues)*
 
 </div>
+
