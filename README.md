@@ -103,7 +103,8 @@ Infrastructure:
 └── GitHub API (Repository analysis)
 ```
 
-> 📸 **Image needed**: Architecture diagram showing data flow from instructor → personas → students → analytics
+> <img width="664" height="525" alt="image" src="https://github.com/user-attachments/assets/1db22820-3db6-47d1-819e-03afbee6d4d2" />
+
 
 ---
 
@@ -154,7 +155,8 @@ persona-sim-fresh/
 4. Returns personas with roles, goals, concerns
 ```
 
-> 📸 **Image needed**: Flow diagram showing persona generation process
+> <img width="725" height="318" alt="image" src="https://github.com/user-attachments/assets/2b577173-39a7-497f-b1cd-c44c399ffe81" />
+
 
 ### 2. Interview Session Flow
 ```typescript
@@ -166,7 +168,8 @@ persona-sim-fresh/
 - Collaborative discussions
 ```
 
-> 📸 **Image needed**: Screenshot of chat interface with persona responses
+> <img width="1489" height="809" alt="image" src="https://github.com/user-attachments/assets/017a33c6-c92f-471f-b3a3-f97fcc4f2d15" />
+
 
 ### 3. Coverage Analysis
 ```typescript
@@ -237,8 +240,6 @@ Response: {
 }
 ```
 
-> 📸 **Image needed**: API flow diagram or Postman/Insomnia screenshot
-
 ---
 
 ## 💻 Local Development
@@ -301,7 +302,8 @@ npm run type-check  # Run TypeScript compiler
 4. Create a new key (Production recommended)
 5. Copy and add to `.env.local`
 
-> 📸 **Image needed**: Screenshot of Cohere dashboard API keys section
+> <img width="1513" height="973" alt="image" src="https://github.com/user-attachments/assets/80e5db3e-4b16-4dcf-ad29-c3402089fa82" />
+
 
 ---
 
@@ -397,5 +399,6 @@ MIT License - see [LICENSE](LICENSE) file
 *Questions? Issues? [Open an issue](https://github.com/jiao2560/persona-sim-fresh/issues)*
 
 </div>
+
 
 
